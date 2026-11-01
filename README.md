@@ -14,7 +14,7 @@ audio, mobile data, calls and SMS.
 | Path | Content |
 |---|---|
 | `docs/` | how the system works and how it was built (start at `docs/architecture.md`) |
-| `kernel/` | device config, kernel patches (incl. 3840x1080 DisplayPort), build/flash scripts, Halium graft tooling |
+| `kernel/` | device config, kernel patches (incl. 3840x1080 DisplayPort support), build/flash scripts, Halium graft tooling |
 | `mir/` | patches on Mir 1.8.3 (cumulative) |
 | `platform/` | patch on the Mir Android/GPU platform |
 | `xwayland/` | Xwayland gralloc + DRI3 patches |
@@ -27,11 +27,10 @@ audio, mobile data, calls and SMS.
 Desktop with window frames, dock, Alt+Tab, full-screen, clipboard (text/images) between Chrome and
 X11 apps, notifications, Bluetooth and Wi-Fi applets, external ultrawide monitor, GPU-accelerated
 GL via native Freedreno on KGSL, audio, mobile data, voice calls and SMS (with an app), DeX
-fan control, screen casting (browser/SRT/Cast/DLNA/Miracast), Chrome, Wine via box64 (experimental).
+fan control, screen casting (browser/SRT/Cast/DLNA/Miracast), Chrome.
 
 ## What does not
-Hardware H.264 decoding (shows repeated frames) and Chrome GPU compositing (software
-only). Anything not listed above has not been tested.
+Hardware H.264 decoding (shows repeated frames). Anything not listed above has not been tested.
 
 ## Privacy
 No personal data, credentials or firmware are published. Run `tools/scan-privacy.sh` before every
