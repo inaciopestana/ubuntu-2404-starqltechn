@@ -68,7 +68,7 @@ KEEP_HOME = ['.config/xfce4', '.config/menus', '.config/autostart', '.config/Thu
 DENY_IN_KEPT = ['icons.screen*.rc',   # xfdesktop: positions of the author's desktop icons (names of files and launchers)
                 '*recent*', '*history*', '*.log', '*.sqlite*', '*cookie*', '*bookmark*', '*token*', '*secret*',
                 '*password*', '*.key', '*.pem', '*.xbel', '*.lock', '*.core', 'sessions', 'xfce4-session-*']
-LAUNCHER_DENY = re.compile(r'wine|office|soda|\.exe|bottles', re.I)   # launchers of removed apps
+LAUNCHER_DENY = re.compile(r'wine|office|soda|\.exe|bottles|claude', re.I)   # launchers of removed apps
 MAX_KEPT_FILE = 5 * MIB
 
 # ---- what the audit accepts --------------------------------------------------------------------
@@ -451,6 +451,9 @@ def copy_filtered(src, dst, relname, stats):
         stats['denied'] += 1
         return False
     st = os.lstat(src)
+    if not stat.S_ISDIR(st.st_mode) and BACKUP_RE.search(base):
+        stats['denied'] += 1                 # the author's own backups and disabled copies (x.backup-DATE, x.before-fix, x.disabled)
+        return False
     if stat.S_ISLNK(st.st_mode):
         os.symlink(os.readlink(src), dst)
         return True
