@@ -19,9 +19,11 @@ upstream components and asserts no ownership over them.
   and boot images. The installer must read them from **your own phone**. The phone must keep
   its Samsung stock firmware (the author's: `G9600ZHU9FVF2`, Android 10); this project never
   modifies or ships the `system` partition.
-* The Halium Android container image `android-rootfs.img` (Halium 10, build 1439). The copy used
-  by the author is identical to the one in the V7 release of `Gustavo2Toledo/ubuntu-touch-star2qltechn`,
-  which carries no licence; it is therefore only referenced (see `docs/installing.md`, step 5.3).
+* The Halium Android container image `android-rootfs.img` (Halium 10, build 1439) **is included** in the root image of
+  the release ZIP. It is the generic `halium_halium_arm64` artifact of the UBports CI (halium-10.0), obtained through the
+  V7 release of `Gustavo2Toledo/ubuntu-touch-star2qltechn`, whose build script fetches it from the UBports CI (that
+  repository itself states no licence). Halium is built from open sources (LineageOS/AOSP: Apache-2.0 and GPL parts;
+  see https://halium.org). Whether the file is byte-identical to the UBports artifact has not been checked yet.
 * The Adreno 630 GPU firmware (`a630_sqe.fw`, `a630_gmu.bin`). These are Qualcomm files that Samsung ships in the phone's
   `vendor` partition. Images built by `tools/image/` leave them out, and a first-boot service
   (`s9-install-gpu-firmware`) copies them from **your own phone's** vendor partition (`/android/vendor/firmware`).

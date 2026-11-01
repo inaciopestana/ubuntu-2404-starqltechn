@@ -108,7 +108,7 @@ Then, inside the arm64 root (chroot with `qemu-aarch64-static`):
    given vendor files extracted from your own phone**.
 3. **Halium Android image.** The container that runs the Android HAL is `android-rootfs.img`
    (Halium 10, `lineage_halium_arm64`, build `QQ3A.200805.001` / 1439, 537,280,512 bytes), expected at
-   `/var/lib/lxc/android/android-rootfs.img` inside the Ubuntu root. It is **not included here**:
+   `/var/lib/lxc/android/android-rootfs.img` inside the Ubuntu root. It is **not included in this repository** (the release ZIP does carry it):
    the author's copy is byte-identical to the one inside the V7 release of the base port
    (`Gustavo2Toledo/ubuntu-touch-star2qltechn`, whose `release/v7` README lists `rootfs.img`
    sha256 `fdd65c57deeed7716726b67384145d6a793ce43194339817e9e7a795d6d0474b`), whose build script fetches the
@@ -191,9 +191,9 @@ being worked on; patches welcome.
 |---|---|
 | **Boot image from scratch** | The ramdisk (`kernel/ramdisk/`) is published and `build-ramdisk.py` works on stand-in binaries, but nobody has built a boot image from it or booted it; the author reused the ramdisk of an existing boot image. Writing the root image to `userdata` (step 5.7) is also untested as written. |
 | **Package list** | The exact list of installed packages and UBports repository pins is not yet exported. |
-| **Halium image not bundled** | `android-rootfs.img` comes from the base port's release, which has no licence, so it cannot be redistributed here; you extract it yourself (step 5.3). A ready-made root image would need the base port's author to allow it, or a rebuild from the UBports CI artifact. |
-| **Mesa KGSL package** | Comes from a third party (`ImPeekaboo`); you must obtain it yourself. |
-| **Image builder** | There is no script that produces a flashable root image; stage 5 is manual. |
+| **Halium image provenance** | `android-rootfs.img` is the UBports CI artifact `halium_halium_arm64` (halium-10.0), obtained via the base port's V7 release. The ready-made release ZIP includes it; the claim that the file is unmodified has not been checked against the CI artifact. |
+| **Mesa KGSL package** | Comes from a third party (`ImPeekaboo`, Mesa under MIT). The ready-made release ZIP includes it under `/opt/mesa-kgsl-peekaboo` with credit. |
+| **Image builder** | `tools/image/build-image.sh` builds a flashable ZIP from a backup of a working phone; it has been tested on a PC only, not yet flashed on a phone. Stage 5 above remains the manual route. |
 | **Tested only here** | `installer/s9-apply-overlay` and `s9-firstboot` were tested on a scratch directory, not on a phone. |
 
 ## Going back
