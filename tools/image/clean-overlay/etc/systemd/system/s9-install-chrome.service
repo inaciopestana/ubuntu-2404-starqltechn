@@ -1,0 +1,16 @@
+[Unit]
+Description=Install Google Chrome from Google's repository (needs a network connection)
+ConditionPathExists=!/usr/bin/google-chrome-stable
+After=network-online.target s9-firstrun.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/s9-install-chrome
+Restart=on-failure
+RestartSec=300
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=multi-user.target

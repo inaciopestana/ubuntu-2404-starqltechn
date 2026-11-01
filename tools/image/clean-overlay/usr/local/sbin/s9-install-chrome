@@ -1,0 +1,30 @@
+#!/bin/bash
+# s9-install-chrome - install Google Chrome from Google's own apt repository.
+# Chrome is not part of the image (it is not ours to redistribute). The service that runs this
+# script retries every 5 minutes until the phone is online, and gives up after 12 failed attempts
+# (counter in /var/lib/s9-ubports/chrome-attempts). Log: /var/log/s9-install-chrome.log
+# Run it by hand with:  sudo s9-install-chrome --force
+set -u
+STATE=/var/lib/s9-ubports/chrome-attempts
+mkdir -p "$(dirname "$STATE")"
+exec >>/var/log/s9-install-chrome.log 2>&1
+echo "== s9-install-chrome $(date -Is)"
+[ "${1:-}" = "--force" ] && rm -f "$STATE"
+if dpkg -s google-chrome-stable >/dev/null 2>&1; then echo "already installed"; exit 0; fi
+N=$(cat "$STATE" 2>/dev/null || echo 0)
+if [ "$N" -ge 12 ]; then echo "gave up after $N attempts; run: sudo s9-install-chrome --force"; exit 0; fi
+echo $((N + 1)) > "$STATE"
+
+fetch() { if command -v curl >/dev/null; then curl -fsSL --max-time 60 "$1"; else wget -qO- --timeout=60 "$1"; fi; }
+KEY=/usr/share/keyrings/google-chrome.gpg
+if [ ! -s "$KEY" ]; then
+  fetch https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor > "$KEY.tmp" && mv "$KEY.tmp" "$KEY" \
+    || { echo "cannot download Google's signing key (no network?)"; rm -f "$KEY.tmp"; exit 1; }
+fi
+if ! grep -rqs 'dl.google.com/linux/chrome' /etc/apt/sources.list /etc/apt/sources.list.d; then
+  echo "deb [arch=arm64 signed-by=$KEY] https://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+fi
+export DEBIAN_FRONTEND=noninteractive
+apt-get update || { echo "apt-get update failed"; exit 1; }
+apt-get install -y google-chrome-stable || { echo "apt-get install failed (does the repository offer arm64 builds?)"; exit 1; }
+echo "Chrome installed: $(google-chrome-stable --version 2>/dev/null)"

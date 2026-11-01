@@ -1,0 +1,13 @@
+[Unit]
+Description=Galaxy S9 first boot: grow the root file system and create the ssh host keys
+ConditionPathExists=!/var/lib/s9-ubports/firstrun.done
+After=local-fs.target
+Before=ssh.service ssh.socket
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/s9-firstrun
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

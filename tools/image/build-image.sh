@@ -8,7 +8,11 @@
 # Output: <out>/s9-<mode>-<stamp>.zip  (+ .sha256), flashed from TWRP with the normal "Install" button.
 #
 # mode restore : the root exactly as it was in the backup (personal data included: keep it private).
-# mode clean   : (not implemented yet) scrubbed root; see tools/image/audit-tree.py for the audit.
+# mode clean   : scrubbed root for distribution. Needs --user NAME (the account created in the image;
+#                the password is asked for, or give --password-hash-file). tools/image/audit-tree.py
+#                removes personal data, renames the desktop account, installs the first-boot overlay
+#                (clean-overlay/) and then audits the result; a blocking finding stops the build.
+#                --stop-after-audit stops there (no image), to iterate on the findings.
 #
 # The root file system is rebuilt with EXACTLY the ext4 features of the phone's file system
 # (read from meta/ext4-root.txt) because the 4.9 kernel cannot mount newer features
@@ -17,6 +21,8 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 DECOMP=${S9_DECOMPRESS:-zstd -dc}
 MODE=restore BACKUP= BOOT= OUT= LABEL= WORK= KEEP=0 EXTRA_MIB=1024 SKIP_VERIFY=0
+NEWUSER= HOSTNAME_NEW=s9 PWFILE= STOP_AUDIT=0 KEEP_HOME=() DROP=()
+HALIUM_SHA=527c53fd8e27957fe4046cd8588d689dec338e8abb6531af4602c2f235ca0944
 while [ $# -gt 0 ]; do
   case $1 in
     --backup) BACKUP=$2; shift 2;;
@@ -28,6 +34,13 @@ while [ $# -gt 0 ]; do
     --extra-mib) EXTRA_MIB=$2; shift 2;;
     --keep-work) KEEP=1; shift;;
     --skip-backup-check) SKIP_VERIFY=1; shift;;
+    --user) NEWUSER=$2; shift 2;;
+    --hostname) HOSTNAME_NEW=$2; shift 2;;
+    --password-hash-file) PWFILE=$2; shift 2;;
+    --stop-after-audit) STOP_AUDIT=1; shift;;
+    --keep-home) KEEP_HOME+=(--keep-home "$2"); shift 2;;
+    --drop) DROP+=(--drop "$2"); shift 2;;
+    --halium-sha256) HALIUM_SHA=$2; shift 2;;
     -h|--help) sed -n '2,15p' "$0"; exit 0;;
     *) echo "unknown option: $1" >&2; exit 2;;
   esac
@@ -40,7 +53,14 @@ human() { numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "$1 B"; }
 say "preflight"
 [ "$(id -u)" = 0 ] || die "run as root (sudo): the tree must keep its numeric owners"
 [ -n "$BACKUP" ] && [ -n "$BOOT" ] && [ -n "$OUT" ] || die "need --backup DIR --boot FILE --out DIR"
-case $MODE in restore) ;; clean) die "mode clean is not implemented yet (run tools/image/audit-tree.py first)";; *) die "unknown mode $MODE";; esac
+case $MODE in
+  restore) ;;
+  clean) [ -n "$NEWUSER" ] || die "mode clean needs --user NAME"
+         [[ $NEWUSER =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] && [ "$NEWUSER" != root ] || die "--user must be a lower-case account name (not root)"
+         [ -f "$HERE/audit-tree.py" ] && [ -d "$HERE/clean-overlay" ] || die "audit-tree.py or clean-overlay/ missing next to this script"
+         command -v openssl >/dev/null || die "missing tool: openssl";;
+  *) die "unknown mode $MODE";;
+esac
 for t in ${DECOMP%% *} tar xz mke2fs e2fsck dumpe2fs python3 sha256sum split; do command -v "$t" >/dev/null || die "missing tool: $t"; done
 [ -f "$BACKUP/root.tar.zst" ] && [ -f "$BACKUP/meta/ext4-root.txt" ] || die "$BACKUP is not a backup (root.tar.zst / meta/ext4-root.txt missing)"
 [ -f "$BOOT" ] || die "boot image not found: $BOOT"
@@ -72,8 +92,6 @@ info "block size $BS, inode size $ISZ, label '$LABEL', uuid $UUID"
 say "1/5 extracting the root tree (this takes a few minutes)"
 rm -rf "$TREE"; mkdir -p "$TREE"
 $DECOMP "$BACKUP/root.tar.zst" | tar -xpf - --xattrs --xattrs-include='*' --acls --numeric-owner -C "$TREE"
-NFILES=$(find "$TREE" -xdev | wc -l); USED=$(du -sxb "$TREE" | cut -f1)
-info "$NFILES entries, $(human "$USED") of data"
 # the swap file is not in the backup (it cannot be copied reliably); recreate it on first boot if fstab wants it
 if grep -qsE '^[^#]*[[:space:]/]swapfile[[:space:]]' "$TREE/etc/fstab" 2>/dev/null && [ ! -e "$TREE/swapfile" ]; then
   mkdir -p "$TREE/etc/systemd/system/multi-user.target.wants"
@@ -91,6 +109,42 @@ UNIT
   ln -sf ../s9-swapfile.service "$TREE/etc/systemd/system/multi-user.target.wants/s9-swapfile.service"
   info "fstab uses /swapfile: added s9-swapfile.service to create it on the first boot"
 fi
+
+if [ "$MODE" = clean ]; then
+  say "1b/5 inventory of the extracted tree (names and sizes only)"
+  python3 -I "$HERE/audit-tree.py" inventory "$TREE" | tee "$WORK/inventory.txt" | head -n 330
+  OLDUSER=$(awk -F: '$3==1000{print $1; exit}' "$TREE/etc/passwd")
+  [ -n "$OLDUSER" ] || die "no account with uid 1000 in the tree"
+  say "1c/5 account and password for the new image"
+  if [ -n "$PWFILE" ]; then
+    S9_PASSWORD_HASH=$(head -n1 "$PWFILE")
+  else
+    [ -r /dev/tty ] || die "no terminal for the password prompt: use --password-hash-file"
+    while :; do
+      read -rsp "   Password for '$NEWUSER': " P1 </dev/tty >/dev/tty; echo >/dev/tty
+      read -rsp "   Repeat: " P2 </dev/tty >/dev/tty; echo >/dev/tty
+      [ -n "$P1" ] && [ "$P1" = "$P2" ] && break
+      echo "   empty or different, again" >/dev/tty
+    done
+    S9_PASSWORD_HASH=$(printf '%s' "$P1" | openssl passwd -6 -stdin); unset P1 P2
+  fi
+  export S9_PASSWORD_HASH
+  say "1d/5 scrubbing personal data and renaming the account"
+  python3 -I "$HERE/audit-tree.py" scrub "$TREE" --user "$NEWUSER" --hostname "$HOSTNAME_NEW" \
+      --overlay "$HERE/clean-overlay" "${KEEP_HOME[@]}" "${DROP[@]}"
+  unset S9_PASSWORD_HASH
+  say "1e/5 audit (blocking findings stop the build)"
+  REPORT=$OUT/clean-report-$STAMP.txt
+  python3 -I "$HERE/audit-tree.py" audit "$TREE" --old-user "$OLDUSER" --expect-user "$NEWUSER" \
+      --halium-sha256 "$HALIUM_SHA" --report "$REPORT" || {
+    info "the tree is kept in $TREE for inspection (delete it afterwards)"
+    die "the audit found blocking problems; nothing was built"; }
+  info "audit passed (REVIEW items above are for you to read)"
+  if [ "$STOP_AUDIT" = 1 ]; then info "--stop-after-audit: no image built; tree kept in $TREE"; exit 0; fi
+fi
+
+NFILES=$(find "$TREE" -xdev | wc -l); USED=$(du -sxb "$TREE" | cut -f1)
+info "$NFILES entries, $(human "$USED") of data"
 
 say "2/5 building the ext4 image"
 MIB=1048576

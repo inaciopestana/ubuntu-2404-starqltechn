@@ -1,0 +1,31 @@
+#!/bin/bash
+# s9-firstrun - one-time setup on the first boot of a freshly flashed image.
+#   1. grow the root file system to fill its partition (the image is built small)
+#   2. create the ssh host keys (the image ships none) and the default self-signed TLS key
+# It writes /var/lib/s9-ubports/firstrun.done only if everything worked; otherwise it runs again
+# at the next boot. Log: /var/log/s9-firstrun.log
+set -u
+DONE=/var/lib/s9-ubports/firstrun.done
+[ -e "$DONE" ] && exit 0
+mkdir -p "$(dirname "$DONE")"
+exec >>/var/log/s9-firstrun.log 2>&1
+echo "== s9-firstrun $(date -Is)"
+ok=1
+
+SRC=$(findmnt -n -o SOURCE / 2>/dev/null)
+case $SRC in /dev/*) ;; *) SRC=/dev/mapper/s9root;; esac
+if command -v resize2fs >/dev/null; then
+  echo "growing $SRC"
+  resize2fs "$SRC" || { echo "resize2fs failed"; ok=0; }
+else
+  echo "resize2fs not found"; ok=0
+fi
+
+if command -v ssh-keygen >/dev/null; then
+  ssh-keygen -A || { echo "ssh-keygen -A failed"; ok=0; }
+fi
+if [ -x /usr/sbin/make-ssl-cert ] && [ ! -e /etc/ssl/private/ssl-cert-snakeoil.key ]; then
+  make-ssl-cert generate-default-snakeoil --force-overwrite || echo "snakeoil certificate not created (not fatal)"
+fi
+
+if [ $ok = 1 ]; then touch "$DONE"; echo "done"; else echo "incomplete: will retry at the next boot"; exit 1; fi
