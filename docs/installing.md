@@ -11,6 +11,12 @@
 * **Samsung Galaxy S9 SM-G9600** (Snapdragon 845). Not the Exynos models; not the S9+ (SM-G9650)
   without changes (the board name, partition numbers and firmware differ).
 * **Unlocked bootloader** and **TWRP** for `starqltechn`. (Unlocking wipes the phone.)
+* **Samsung stock firmware on the phone, left untouched.** The author's phone runs the last stock
+  update for this model: build `G9600ZHU9FVF2` (Android 10, `QP1A.190711.020`, security patch
+  2022-05-01). The `system` and `vendor` partitions and the modem firmware stay as Samsung shipped them
+  (the ramdisk mounts the vendor and modem partitions at boot); this port **never writes the `system` partition**. If your phone is on another build, expect differences
+  (vendor libraries, firmware paths). Get the firmware from an official source and flash it with
+  Odin; it is not distributed here.
 * A Linux PC (x86_64, Ubuntu 22.04 or later) with about 40 GB free, root access, and:
   `adb`, `debootstrap`, `qemu-user-static` + `binfmt-support`, `systemd-container` (`systemd-nspawn`),
   `git`, `python3`, `mkbootimg`/`unpack_bootimg.py` (from AOSP `system/tools/mkbootimg`), `sha256sum`.
@@ -100,9 +106,23 @@ Then, inside the arm64 root (chroot with `qemu-aarch64-static`):
 2. Run the Halium graft helpers `kernel/halium-graft/00..08` (dry-run by default; `--apply` to
    write). They adapt a reference Halium device's graphics/audio files to the S9 and **must be
    given vendor files extracted from your own phone**.
-3. Build and install the patched Mir/Xwayland/shell (see [compositor-and-window-manager.md](compositor-and-window-manager.md)
+3. **Halium Android image.** The container that runs the Android HAL is `android-rootfs.img`
+   (Halium 10, `lineage_halium_arm64`, build `QQ3A.200805.001` / 1439, 537,280,512 bytes), expected at
+   `/var/lib/lxc/android/android-rootfs.img` inside the Ubuntu root. It is **not included here**:
+   the author's copy is byte-identical to the one inside the V7 release of the base port
+   (`Gustavo2Toledo/ubuntu-touch-star2qltechn`, whose `release/v7` README lists `rootfs.img`
+   sha256 `fdd65c57deeed7716726b67384145d6a793ce43194339817e9e7a795d6d0474b`), whose build script fetches the
+   generic `halium_halium_arm64` artifact of the UBports CI (halium-10.0); whether the file is that artifact unmodified was not checked. That repository states no
+   licence, so we only point to it. Extract the file yourself (loop-mount the raw system image of
+   that release read-only and copy `var/lib/lxc/android/android-rootfs.img`) and check:
+   ```sh
+   echo "527c53fd8e27957fe4046cd8588d689dec338e8abb6531af4602c2f235ca0944  android-rootfs.img" | sha256sum -c
+   ```
+   (The identity of the two copies was verified on the author's PC and phone; the extraction steps
+   from the downloadable ZIP were not rehearsed.)
+4. Build and install the patched Mir/Xwayland/shell (see [compositor-and-window-manager.md](compositor-and-window-manager.md)
    and the patches in `mir/`, `platform/`, `xwayland/`, `shell/`) into the layout below.
-4. Copy this repository to `/opt/s9-ubports` inside the root (the first-boot service expects it
+5. Copy this repository to `/opt/s9-ubports` inside the root (the first-boot service expects it
    there) and enable the first-boot service:
    ```sh
    # run inside the clone
@@ -119,7 +139,7 @@ Then, inside the arm64 root (chroot with `qemu-aarch64-static`):
    (`s9-firstboot` with `--conf` skips the questions. `installer/s9-apply-overlay` is the part that
    copies `system/` and `userland/`, fills the `@S9_USER@` placeholders, creates the account and
    enables the units.)
-5. Binary layout the `s9-miral-nested.service` unit expects:
+6. Binary layout the `s9-miral-nested.service` unit expects:
 
    | Path | Content |
    |---|---|
@@ -129,7 +149,7 @@ Then, inside the arm64 root (chroot with `qemu-aarch64-static`):
    | `/opt/s9-xwayland-gralloc/Xwayland.wrapper` | Xwayland with the gralloc backend (bind-mounted over `/usr/bin/Xwayland`) |
    | `/opt/mesa-kgsl-peekaboo/` | Mesa with Freedreno on KGSL (third-party package, not included) |
 
-6. **Put the root file system on the phone.** The Ubuntu root lives inside the `userdata`
+7. **Put the root file system on the phone.** The Ubuntu root lives inside the `userdata`
    partition (`sda29`), 1 MiB from its start; the ramdisk maps it as `/dev/mapper/s9root`
    ([kernel/ramdisk/README.md](../kernel/ramdisk/README.md)). This **destroys everything on `userdata`**
    (back it up if you want to keep it). Build a small ext4 image and write it at the 1 MiB offset
@@ -169,8 +189,9 @@ being worked on; patches welcome.
 
 | Gap | Detail |
 |---|---|
-| **Boot image from scratch** | The ramdisk (`kernel/ramdisk/`) is published and `build-ramdisk.py` works on stand-in binaries, but nobody has built a boot image from it or booted it; the author reused the ramdisk of an existing boot image. Writing the root image to `userdata` (step 5.6) is also untested as written. |
+| **Boot image from scratch** | The ramdisk (`kernel/ramdisk/`) is published and `build-ramdisk.py` works on stand-in binaries, but nobody has built a boot image from it or booted it; the author reused the ramdisk of an existing boot image. Writing the root image to `userdata` (step 5.7) is also untested as written. |
 | **Package list** | The exact list of installed packages and UBports repository pins is not yet exported. |
+| **Halium image not bundled** | `android-rootfs.img` comes from the base port's release, which has no licence, so it cannot be redistributed here; you extract it yourself (step 5.3). A ready-made root image would need the base port's author to allow it, or a rebuild from the UBports CI artifact. |
 | **Mesa KGSL package** | Comes from a third party (`ImPeekaboo`); you must obtain it yourself. |
 | **Image builder** | There is no script that produces a flashable root image; stage 5 is manual. |
 | **Tested only here** | `installer/s9-apply-overlay` and `s9-firstboot` were tested on a scratch directory, not on a phone. |

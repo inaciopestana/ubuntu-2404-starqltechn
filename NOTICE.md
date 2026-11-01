@@ -16,8 +16,13 @@ upstream components and asserts no ownership over them.
 
 ## Not included, on purpose
 * Samsung/Qualcomm firmware and vendor blobs, Android system/vendor images, the stock kernel
-  and boot images. The installer must read them from **your own phone**.
-* Google Chromeand the Mesa KGSL package from *ImPeekaboo/mesa-a630-kgsl*; they are referenced and installed from their original sources.
+  and boot images. The installer must read them from **your own phone**. The phone must keep
+  its Samsung stock firmware (the author's: `G9600ZHU9FVF2`, Android 10); this project never
+  modifies or ships the `system` partition.
+* The Halium Android container image `android-rootfs.img` (Halium 10, build 1439). The copy used
+  by the author is identical to the one in the V7 release of `Gustavo2Toledo/ubuntu-touch-star2qltechn`,
+  which carries no licence; it is therefore only referenced (see `docs/installing.md`, step 5.3).
+* Google Chrome and the Mesa KGSL package from *ImPeekaboo/mesa-a630-kgsl*; they are referenced and installed from their original sources.
 
 ## Credits
 UBports and the Lomiri/Halium communities; Canonical (Mir/MirAL); X.Org; the `lfdevs`
