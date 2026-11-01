@@ -29,7 +29,11 @@ upstream components and asserts no ownership over them.
 * The Adreno 630 GPU firmware (`a630_sqe.fw`, `a630_gmu.bin`). These are Qualcomm files that Samsung ships in the phone's
   `vendor` partition. Images built by `tools/image/` leave them out, and a first-boot service
   (`s9-install-gpu-firmware`) copies them from **your own phone's** vendor partition (`/android/vendor/firmware`).
-* Google Chrome and the Mesa KGSL package from *ImPeekaboo/mesa-a630-kgsl*; they are referenced and installed from their original sources.
+* Google Chrome: downloaded from Google at the first boot, not shipped.
+* The Mesa KGSL package from *ImPeekaboo/mesa-a630-kgsl* **is included** in the release ZIP, with credit.
+* Wine, box64, hangover, Windows/Office software and Claude Desktop are left out of the release ZIP.
+
+The full list of what the ZIP contains, with licences and source locations, is in [`THIRD_PARTY.md`](THIRD_PARTY.md).
 
 ## Credits
 UBports and the Lomiri/Halium communities; Canonical (Mir/MirAL); X.Org; the `lfdevs`

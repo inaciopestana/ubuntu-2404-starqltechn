@@ -16,5 +16,5 @@ Start with `architecture.md`, then read the topic you need.
 | `video-playback.md` | video decoding status |
 | `windows-apps-and-memory.md` | box64 + Wine and the low-memory killer |
 | `kmshare.md` | sharing a PC keyboard/mouse |
-| `installing.md` | how another person can install this (status and plan) |
+| `installing.md` | how to install: the release ZIP route, and the manual route |
 | `configuration.md` | `/etc/s9-ubports.conf` |

@@ -1,6 +1,7 @@
 # Windows applications (box64 + Wine) and memory pressure
 
-**Status: experimental.** Wine 11.x (WoW64) runs under box64 0.4.4 with the Dynarec. The
+**Status: experimental, and not part of the release ZIP** (the image builder leaves Wine, box64, hangover and Office out;
+this page describes the author's own phone). Wine 11.x (WoW64) runs under box64 0.4.4 with the Dynarec. The
 Wine4Office installer is used for the runner/prefix management; the Office suites themselves
 are **not** distributed or installed by this project.
 

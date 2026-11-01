@@ -2,10 +2,21 @@
 
 > **Read this first.** This is a hobby port assembled by one person on one phone. The pieces
 > below are real and were used on that phone, but **nobody has repeated the whole procedure from
-> a blank phone**: building a boot image from scratch and writing the root image to `userdata`
-> have not been tried (see [Known gaps](#known-gaps)). Flashing a boot image can leave the phone
-> unbootable; doing the wrong thing to modem/EFS partitions can destroy IMEI and radio. Only
-> continue if you can recover a phone with Odin/stock firmware and you accept that risk.
+> a blank phone**, and the release ZIP has not been flashed on a phone yet (see [Known gaps](#known-gaps)). Flashing a boot
+> image can leave the phone unbootable; the ZIP erases `userdata`; doing the wrong thing to modem/EFS partitions can destroy
+> IMEI and radio. Only continue if you can recover a phone with Odin/stock firmware and you accept that risk.
+
+## Quick route: the release ZIP
+1. Stock Android 10 (PDA `G9600ZHU9FVF2`) on the phone, bootloader unlocked (sections 0 and 1 below: **back up first**).
+2. Patch the original TWRP so it keeps its settings and flash it: [`tools/twrp/`](../tools/twrp/README.md).
+3. In that TWRP, flash `multidisabler` and `forceencrypt_remover_q` (links on the [front page](../README.md)).
+4. Put `s9-clean-*.zip` (from the [Releases](../../../releases) page; compare its SHA-256) on a **microSD card or USB-OTG
+   drive** and install it from TWRP. Without a card: `adb sideload`, or
+   [`tools/image/flash-from-pc.sh`](../tools/image/flash-from-pc.sh) from a PC over USB ([`tools/image/README.md`](../tools/image/README.md)).
+5. First boot: a window asks for your **user name, password and host name**; the phone restarts. Chrome is downloaded once
+   there is network. What the ZIP does and does not contain: [`THIRD_PARTY.md`](../THIRD_PARTY.md).
+
+The sections below are the manual route (building everything yourself) and the details behind each step.
 
 ## 0. What you need
 * **Samsung Galaxy S9 SM-G9600** (Snapdragon 845). Not the Exynos models; not the S9+ (SM-G9650)
@@ -173,6 +184,10 @@ Then, inside the arm64 root (chroot with `qemu-aarch64-static`):
    mapping: `sudo resize2fs /dev/mapper/s9root`.
 
 ## 6. First boot
+**Release ZIP:** a graphical window asks for the user name, password and host name, applies them (the account is renamed
+everywhere it is referenced) and restarts the phone. If it fails it undoes its changes. The rest of this section is about
+the manual route.
+
 Boot the phone. If the first-boot service was enabled and no `--conf` was given, it asks on
 `tty1` for: user name, password (twice), host name, time zone, keyboard layout and variant, and
 locale. Then it writes `/etc/s9-ubports.conf`, installs the overlay, creates the account and
@@ -200,7 +215,7 @@ being worked on; patches welcome.
 | **Package list** | The exact list of installed packages and UBports repository pins is not yet exported. |
 | **Halium image provenance** | `android-rootfs.img` is the UBports CI artifact `halium_halium_arm64` (halium-10.0), obtained via the base port's V7 release. The ready-made release ZIP includes it; the claim that the file is unmodified has not been checked against the CI artifact. |
 | **Mesa KGSL package** | Comes from a third party (`ImPeekaboo`, Mesa under MIT). The ready-made release ZIP includes it under `/opt/mesa-kgsl-peekaboo` with credit. |
-| **Image builder** | `tools/image/build-image.sh` builds a flashable ZIP from a backup of a working phone; it has been tested on a PC only, not yet flashed on a phone. Stage 5 above remains the manual route. |
+| **Release ZIP on a phone** | The ZIP builds, passes its audit and was inspected on a PC (no personal data found), but it has not been flashed on a phone. Not yet tested: the first-boot window on a real screen, the one-time rebuild of `/var/lib/android-data`, growing the file system online (`resize2fs`) on kernel 4.9, and the `boot.img` in the ZIP, which is a newer build (`#1`, 1 Nov) of the kernel than the one the author runs (`#9`, 22 Oct). Stage 5 above remains the manual route. |
 | **Tested only here** | `installer/s9-apply-overlay` and `s9-firstboot` were tested on a scratch directory, not on a phone. |
 
 ## Going back
