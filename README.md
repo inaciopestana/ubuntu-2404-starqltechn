@@ -1,7 +1,7 @@
 # Ubuntu 24.04 + XFCE on the Samsung Galaxy S9 (SM-G9600)
 
 A community experiment that runs a **full Ubuntu 24.04 desktop** (XFCE) on a Snapdragon 845
-Galaxy S9 using Halium 10, with GPU acceleration (Adreno 630), a 3840x1080 external display,
+Galaxy S9 using Halium 10, with GPU acceleration (Adreno 630), external display support,
 audio, mobile data, calls and SMS.
 
 > **Status: experimental, one device, one tester.** Everything here comes from the author's
