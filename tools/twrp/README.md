@@ -18,8 +18,11 @@ Nothing else in the recovery changes. Kernel, device tree and every other ramdis
 | `patch-recovery-settings.sh` | PC | Takes a recovery image file, adds the flag, repacks, and verifies the result. Never touches the phone. |
 | `flash-recovery.sh` | Phone (root) | Backs up the current recovery partition (`sda21`), writes the patched image, reads it back and compares SHA-256. |
 
-No recovery image is stored in this repository. TWRP and `magiskboot` are third-party GPL projects; get them from their
-own releases.
+No recovery image is stored in the repository tree. TWRP and `magiskboot` are third-party GPL projects; get them from their
+own releases. For convenience the result of this procedure (`twrp-3.7.0_9-0-starqltechn-settings-cache.img`, SHA-256
+`96063fe2ba5c8450dced1f0bbdce9fe0da11f5a7fa462f6acaf89c122f115df0`) is also attached to the
+[release](../../../../releases/tag/v0.1.0-pre1) as a binary: it is TeamWin's TWRP with one line changed in
+`etc/recovery.fstab` (see above); TWRP's source is available from <https://twrp.me/> and TeamWin's GitHub organisation.
 
 ## Usage
 

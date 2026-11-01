@@ -19,7 +19,8 @@ Five steps, in this order. Details, risks and the way back are in [`docs/install
 2. **Unlock the bootloader** (Developer options > OEM unlocking, then the download-mode unlock). This wipes the phone and
    trips Knox.
 3. **Install the custom TWRP that keeps its settings in `/cache`** (see [`tools/twrp/`](tools/twrp/README.md)).
-   Download the original recovery to patch from TWRP: [`twrp-3.7.0_9-0-starqltechn.img`](https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html).
+   Either download the already patched `twrp-3.7.0_9-0-starqltechn-settings-cache.img` from the [Releases](../../releases) page, or
+   patch the original yourself: [`twrp-3.7.0_9-0-starqltechn.img`](https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html).
    Ubuntu lives in a dedicated image inside the `userdata` partition, so TWRP cannot keep its settings there; the
    patched recovery stores them on `/cache` instead (one flag in `recovery.fstab`).
 4. **In that TWRP, flash `multidisabler` and `forceencrypt_remover_q`** (two ZIPs, one after the other; download them from
