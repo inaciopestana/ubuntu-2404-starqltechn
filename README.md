@@ -24,8 +24,8 @@ audio, mobile data, calls and SMS.
 | `tools/` | maintainer tools: privacy scan, export scripts |
 
 ## What works (on the author's device)
-Desktop with window frames, dock, Alt+Tab, full-screen, clipboard (text/images) between Chrome and
-X11 apps, notifications, Bluetooth and Wi-Fi applets, external ultrawide monitor, GPU-accelerated
+Desktop with window frames, dock, Alt+Tab, full-screen, clipboard (text/images) between Wayland native and
+X11 apps, notifications, Bluetooth and Wi-Fi applets, external monitor with audio (ultrawide resolution supported), GPU-accelerated
 GL via native Freedreno on KGSL, audio, mobile data, voice calls and SMS (with an app), DeX
 fan control, screen casting (browser/SRT/Cast/DLNA/Miracast), Chrome.
 
