@@ -17,8 +17,7 @@ upstream components and asserts no ownership over them.
 ## Not included, on purpose
 * Samsung/Qualcomm firmware and vendor blobs, Android system/vendor images, the stock kernel
   and boot images. The installer must read them from **your own phone**.
-* Google Chrome, Microsoft Office, Wine4Office, box64 binaries and the Mesa KGSL package from
-  *ImPeekaboo/mesa-a630-kgsl*; they are referenced and installed from their original sources.
+* Google Chromeand the Mesa KGSL package from *ImPeekaboo/mesa-a630-kgsl*; they are referenced and installed from their original sources.
 
 ## Credits
 UBports and the Lomiri/Halium communities; Canonical (Mir/MirAL); X.Org; the `lfdevs`
@@ -27,6 +26,6 @@ FakeShell (Snapdragon 845 Samsung kernel); Gustavo2Toledo (Galaxy S9+ community 
 structure this port started from); the libhybris, ofono-sailfish and pulseaudio-modules-droid
 maintainers.
 
-Samsung, Galaxy, Qualcomm, Snapdragon, Adreno, Google and Microsoft are trademarks of their
+Samsung, Galaxy, Qualcomm, Snapdragon, Adreno, Google are trademarks of their
 owners. This project is not affiliated with or endorsed by any of them, nor by UBports or
 Canonical.
