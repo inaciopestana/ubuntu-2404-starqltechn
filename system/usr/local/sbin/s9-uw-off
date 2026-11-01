@@ -1,0 +1,10 @@
+#!/bin/bash
+set -euo pipefail
+BK=$(ls -1 /etc/s9-miral.display.before-uw-* 2>/dev/null | head -1)
+[ -n "$BK" ] || { echo "sem backup before-uw"; exit 1; }
+echo "restaurando de $BK"
+cp -a "$BK" /etc/s9-miral.display
+systemctl restart s9-miral-nested.service
+sleep 8
+systemctl is-active s9-miral-nested.service s9-lsc.service || true
+cat /etc/s9-miral.display

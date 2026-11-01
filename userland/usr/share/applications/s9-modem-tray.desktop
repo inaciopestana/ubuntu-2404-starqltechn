@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Modem (chip)
+Comment=Ligar/desligar dados moveis do chip
+Exec=/usr/local/bin/s9-modem-tray
+Icon=network-cellular-signal-good-symbolic
+Categories=X-S9-Telephony;

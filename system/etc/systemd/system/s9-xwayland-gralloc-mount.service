@@ -1,0 +1,13 @@
+[Unit]
+Description=S9 Xwayland gralloc: bind-mount do wrapper sobre /usr/bin/Xwayland
+ConditionPathExists=/opt/s9-xwayland-gralloc/Xwayland.wrapper
+Before=s9-miral-nested.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'grep -q " /usr/bin/Xwayland " /proc/self/mountinfo || mount --bind /opt/s9-xwayland-gralloc/Xwayland.wrapper /usr/bin/Xwayland'
+ExecStop=/bin/sh -c 'grep -q " /usr/bin/Xwayland " /proc/self/mountinfo && umount /usr/bin/Xwayland || true'
+
+[Install]
+WantedBy=multi-user.target

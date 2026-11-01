@@ -1,0 +1,26 @@
+#!/bin/bash
+# roda como o usuario da sessao. uso: launcher | launcher --unhide
+UIDN=$(id -u); READY=/tmp/s9-modem-menu.ready.$UIDN; FLAG=/tmp/s9-modem-menu.hid.$UIDN
+log(){ echo "S9-MENU-LAUNCHER $*" >&2; }
+until PANEL=$(pgrep -u "$UIDN" -x xfce4-panel | head -1) && [ -n "$PANEL" ]; do sleep 3; done
+while read -r kv; do case "$kv" in DBUS_SESSION_BUS_ADDRESS=*|DISPLAY=*) export "$kv";; esac; done < <(tr '\0' '\n' </proc/$PANEL/environ)
+[ -n "$DBUS_SESSION_BUS_ADDRESS" ] || { log "sem bus de sessao"; exit 1; }
+PSYS=$(xfconf-query -c xfce4-panel -lv 2>/dev/null | sed -nE 's#^/plugins/plugin-([0-9]+) +systray.*#\1#p' | head -1)
+KEY=/plugins/plugin-$PSYS/hidden-items
+cur_list(){ xfconf-query -c xfce4-panel -p "$KEY" 2>/dev/null | grep -vE '^(Value is an array|$)'; }
+setlist(){ # args: valores
+  if [ $# -eq 0 ]; then xfconf-query -c xfce4-panel -p "$KEY" -r 2>/dev/null; return; fi
+  local a=(); for v in "$@"; do a+=(-t string -s "$v"); done
+  xfconf-query -c xfce4-panel -p "$KEY" -n -a "${a[@]}" 2>/dev/null || xfconf-query -c xfce4-panel -p "$KEY" -a "${a[@]}"
+}
+hide(){ [ -n "$PSYS" ] || return; local l; mapfile -t l < <(cur_list); printf '%s\n' "${l[@]}" | grep -qx nm-applet && return; setlist "${l[@]}" nm-applet && touch "$FLAG" && log "nm-applet original ocultado"; }
+unhide(){ [ -n "$PSYS" ] && [ -e "$FLAG" ] || return; local l n=(); mapfile -t l < <(cur_list); for v in "${l[@]}"; do [ "$v" != nm-applet ] && [ -n "$v" ] && n+=("$v"); done; setlist "${n[@]}"; rm -f "$FLAG"; log "nm-applet original reexibido"; }
+if [ "$1" = "--unhide" ]; then unhide; exit 0; fi
+until busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1; do sleep 2; done
+rm -f "$READY"
+/usr/bin/python3 /usr/local/bin/s9-modem-menu.py &
+PY=$!
+trap 'kill $PY 2>/dev/null; unhide' EXIT TERM INT
+for i in $(seq 1 120); do [ -e "$READY" ] && break; kill -0 $PY 2>/dev/null || break; sleep 1; done
+[ -e "$READY" ] && { sleep 2; hide; }
+wait $PY

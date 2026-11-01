@@ -1,0 +1,21 @@
+.fail
+load-module module-native-protocol-unix
+
+.nofail
+load-module module-device-restore
+load-module module-stream-restore
+load-module module-card-restore
+
+### UBports / Halium / Android Audio HAL
+### S9: discover trocado por carga direta (deep buffer ligado => sink primario existe)
+load-module module-droid-card-29
+load-module module-droid-hidl
+
+### Restaura dispositivos preferidos
+load-module module-default-device-restore
+
+### S9_AUDIO_SUSPEND_V1: suspende sinks/sources ociosos. Sem isso o Pulse e o audio HAL ficam
+### escrevendo silencio ~450x/s e o logd do Android recebe centenas de linhas. Falha nao derruba o Pulse.
+.nofail
+load-module module-suspend-on-idle timeout=5
+.fail

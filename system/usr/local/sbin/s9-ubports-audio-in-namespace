@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+COMPAT=/system/lib64/hw/audio.hidl_compat.default.so
+TARGET=/vendor/lib64/hw/audio.primary.default.so
+
+# Esta montagem existe apenas neste namespace.
+mount --bind "$COMPAT" "$TARGET"
+
+A=$(sha256sum "$COMPAT" | awk '{print $1}')
+B=$(sha256sum "$TARGET" | awk '{print $1}')
+
+if [ "$A" != "$B" ]; then
+    echo "ERRO=OVERLAY_HIDL_NAO_APLICADO" >&2
+    exit 1
+fi
+
+echo "HIDL_COMPAT_ISOLADO=ATIVO"
+
+ENV_S9=(
+    HOME=@S9_HOME@
+    USER=@S9_USER@
+    LOGNAME=@S9_USER@
+    XDG_RUNTIME_DIR=/run/user/1000
+    DISPLAY=:0
+    XAUTHORITY=@S9_HOME@/.Xauthority
+    PULSE_NO_AUTOSPAWN=1
+)
+
+if [ -n "${S9_DBUS:-}" ]; then
+    ENV_S9+=("DBUS_SESSION_BUS_ADDRESS=$S9_DBUS")
+fi
+
+exec /usr/sbin/runuser -u @S9_USER@ -- \
+    /usr/bin/env "${ENV_S9[@]}" \
+    /usr/bin/pulseaudio \
+        --daemonize=no \
+        --exit-idle-time=-1 \
+        --log-target=journal \
+        --log-level=warning \
+        --fail=yes \
+        -n -F /etc/s9-ubports-audio.pa

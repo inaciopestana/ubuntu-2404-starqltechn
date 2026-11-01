@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export XDG_CURRENT_DESKTOP=XFCE
+export XDG_SESSION_DESKTOP=s9-mir-xfce
+# Components only: no xfwm4, no xfdesktop, no startxfce4.
+command -v xfsettingsd >/dev/null && xfsettingsd --daemon || true
+command -v xfce4-panel >/dev/null && (pgrep -x xfce4-panel >/dev/null || xfce4-panel >/tmp/xfce4-panel.log 2>&1 &)
+# appfinder is on-demand, but ensure it is installed
+command -v xfce4-appfinder >/dev/null || echo "WARN: xfce4-appfinder ausente" >&2
+wait

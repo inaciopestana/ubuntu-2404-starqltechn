@@ -1,0 +1,35 @@
+#!/bin/bash
+# s9-lastkmsg-save: a cada boot guarda (1) o log de kernel da sessao ANTERIOR (/proc/last_kmsg) e (2) os primeiros ~95 s do dmesg desta sessao.
+# Serve para entender reinicios no boot sem depender do relogio: os arquivos sao numerados (seq) e levam o boot_id.
+# Guarda os 12 ultimos pares em /var/lib/s9-lastkmsg. Resumo em index.log (prev_last_stamp = ate que segundo a sessao anterior chegou).
+LK=${S9_LK:-/proc/last_kmsg}
+D=${S9_DIR:-/var/lib/s9-lastkmsg}
+mkdir -p "$D"
+BID=$(cut -c1-8 /proc/sys/kernel/random/boot_id)
+UP=$(cut -d' ' -f1 /proc/uptime)
+SEQ=$(( $(cat "$D/seq" 2>/dev/null || echo 0) + 1 ))
+N=$(printf %04d "$SEQ")
+KS='<[0-9]+>\[ *[0-9]+\.[0-9]+\]'
+STAMP=- PANIC=0 RC11=0 NOTE=
+if [ -s "$LK" ]; then
+  tr -d '\000' < "$LK" > "$D/.lk.tmp"
+  SUM=$(sha256sum < "$D/.lk.tmp" | cut -c1-16)
+  if [ "$SUM" != "$(cat "$D/last_sum" 2>/dev/null)" ]; then
+    STAMP=$(grep -a -o -E "$KS" "$D/.lk.tmp" | tail -1 | grep -o '[0-9]*\.[0-9]*')
+    grep -a -q -i -E 'Kernel panic|Unable to handle kernel|Internal error: |rcu.*stall' "$D/.lk.tmp" && PANIC=1
+    RC11=$(grep -a -c 'rc:-11' "$D/.lk.tmp")
+    gzip -c "$D/.lk.tmp" > "$D/$N-prev-of-$BID.lastkmsg.gz"
+    echo "$SUM" > "$D/last_sum"
+  else
+    NOTE=" (last_kmsg igual ao ja guardado)"
+  fi
+  rm -f "$D/.lk.tmp"
+else
+  NOTE=" (sem last_kmsg)"
+fi
+dmesg 2>/dev/null | tr -d '\000' | awk -F'[][]' '{t=$2+0; if (t<=95) print}' | gzip -c > "$D/$N-boot-$BID.dmesg.gz"
+CUR=$(dmesg 2>/dev/null | grep -a -c 'rc:-11')
+echo "$SEQ" > "$D/seq"
+echo "seq=$N boot=$BID up=${UP}s clock=$(date '+%F %T') prev_last_stamp=${STAMP:--}s prev_panic=$PANIC prev_rc11=$RC11 cur_rc11=$CUR$NOTE" >> "$D/index.log"
+ls -1t "$D"/*.gz 2>/dev/null | tail -n +25 | xargs -r rm -f
+exit 0

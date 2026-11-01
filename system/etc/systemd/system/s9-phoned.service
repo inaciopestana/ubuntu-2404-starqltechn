@@ -1,0 +1,11 @@
+[Unit]
+Description=Telefone do S9: chamadas e SMS via ofono
+After=ofono.service
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/sbin/s9-phoned
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

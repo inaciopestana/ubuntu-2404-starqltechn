@@ -1,0 +1,259 @@
+#!/bin/bash
+set -euo pipefail
+
+FIFO="/run/s9-displayctl"
+
+usage()
+{
+    echo "Uso:"
+    echo "  s9-displayctl portrait"
+    echo "  s9-displayctl landscape-right"
+    echo "  s9-displayctl landscape-left"
+    echo "  s9-displayctl inverted"
+    exit 2
+}
+
+[ $# -eq 1 ] || usage
+
+case "$1" in
+    portrait|normal)
+        COMMAND="portrait"
+        ;;
+    landscape-right|right)
+        COMMAND="landscape-right"
+        ;;
+    landscape-left|left)
+        COMMAND="landscape-left"
+        ;;
+    inverted|portrait-inverted)
+        COMMAND="inverted"
+        ;;
+    *)
+        usage
+        ;;
+esac
+
+if [ ! -p "$FIFO" ]; then
+    echo "ERRO: FIFO $FIFO não existe." >&2
+    exit 3
+fi
+
+echo "S9-DISPLAYCTL command=$COMMAND"
+
+# Mir runtime orientation
+timeout 3s sh -c \
+    "printf '%s\n' '$COMMAND' > '$FIFO'"
+
+echo "MIR_COMMAND_SENT=1"
+
+
+#
+# Xwayland normally updates very quickly, but xfdesktop may
+# reposition/recreate its Desktop window slightly later.
+#
+# Repeat the repair for ~2 seconds so it also catches a
+# recreated Desktop window.
+#
+fix_desktop()
+{
+python3 <<'PY'
+import ctypes
+import os
+from ctypes import (
+    c_void_p, c_ulong, c_uint, c_int,
+    c_char_p, POINTER, byref
+)
+
+x11 = ctypes.CDLL("libX11.so.6")
+
+x11.XOpenDisplay.argtypes = [c_char_p]
+x11.XOpenDisplay.restype = c_void_p
+
+x11.XDefaultRootWindow.argtypes = [c_void_p]
+x11.XDefaultRootWindow.restype = c_ulong
+
+x11.XQueryTree.argtypes = [
+    c_void_p,
+    c_ulong,
+    POINTER(c_ulong),
+    POINTER(c_ulong),
+    POINTER(POINTER(c_ulong)),
+    POINTER(c_uint),
+]
+x11.XQueryTree.restype = c_int
+
+x11.XFetchName.argtypes = [
+    c_void_p,
+    c_ulong,
+    POINTER(c_char_p),
+]
+x11.XFetchName.restype = c_int
+
+x11.XGetGeometry.argtypes = [
+    c_void_p,
+    c_ulong,
+    POINTER(c_ulong),
+    POINTER(c_int),
+    POINTER(c_int),
+    POINTER(c_uint),
+    POINTER(c_uint),
+    POINTER(c_uint),
+    POINTER(c_uint),
+]
+x11.XGetGeometry.restype = c_int
+
+x11.XMoveWindow.argtypes = [
+    c_void_p,
+    c_ulong,
+    c_int,
+    c_int,
+]
+
+x11.XSync.argtypes = [
+    c_void_p,
+    c_int,
+]
+
+x11.XFree.argtypes = [c_void_p]
+
+
+display_name = os.environ.get("DISPLAY", ":0").encode()
+
+dpy = x11.XOpenDisplay(display_name)
+
+if not dpy:
+    raise SystemExit(
+        f"XFdesktop repair: não consegui abrir DISPLAY "
+        f"{display_name.decode()}"
+    )
+
+root = x11.XDefaultRootWindow(dpy)
+
+root_return = c_ulong()
+parent_return = c_ulong()
+children = POINTER(c_ulong)()
+nchildren = c_uint()
+
+if not x11.XQueryTree(
+    dpy,
+    root,
+    byref(root_return),
+    byref(parent_return),
+    byref(children),
+    byref(nchildren),
+):
+    raise SystemExit("XFdesktop repair: XQueryTree falhou")
+
+candidates = []
+
+try:
+    for i in range(nchildren.value):
+        wid = children[i]
+
+        name = c_char_p()
+
+        if not x11.XFetchName(
+            dpy,
+            wid,
+            byref(name),
+        ):
+            continue
+
+        try:
+            value = (
+                name.value.decode(
+                    "utf-8",
+                    errors="replace"
+                )
+                if name.value
+                else ""
+            )
+        finally:
+            if name:
+                x11.XFree(name)
+
+        if value != "Desktop":
+            continue
+
+        root_geo = c_ulong()
+        x = c_int()
+        y = c_int()
+        width = c_uint()
+        height = c_uint()
+        border = c_uint()
+        depth = c_uint()
+
+        if not x11.XGetGeometry(
+            dpy,
+            wid,
+            byref(root_geo),
+            byref(x),
+            byref(y),
+            byref(width),
+            byref(height),
+            byref(border),
+            byref(depth),
+        ):
+            continue
+
+        candidates.append(
+            (
+                width.value * height.value,
+                wid,
+                x.value,
+                y.value,
+                width.value,
+                height.value,
+            )
+        )
+
+finally:
+    if children:
+        x11.XFree(children)
+
+
+if not candidates:
+    print("XFDESKTOP_WINDOW_FOUND=0")
+    raise SystemExit(0)
+
+
+# Ignore any tiny helper/dummy xfdesktop windows and select
+# the real desktop by area.
+candidates.sort(reverse=True)
+
+area, wid, x, y, width, height = candidates[0]
+
+print(
+    f"XFDESKTOP_BEFORE "
+    f"id=0x{wid:x} "
+    f"geometry={width}x{height}{x:+d}{y:+d}"
+)
+
+x11.XMoveWindow(
+    dpy,
+    wid,
+    0,
+    0,
+)
+
+x11.XSync(
+    dpy,
+    0,
+)
+
+print(
+    f"XFDESKTOP_MOVED "
+    f"id=0x{wid:x} "
+    f"to=+0+0"
+)
+PY
+}
+
+
+for I in 1 2 3 4 5 6 7 8; do
+    sleep 0.25
+
+    fix_desktop || true
+done
+
+echo "XFDESKTOP_REPAIR_DONE=1"

@@ -1,0 +1,14 @@
+[Unit]
+Description=S9 Panel (icone na bandeja com Phone, SMS, Screen Cast, Mobile Data e ventoinha)
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/s9-panel-launch
+Restart=always
+RestartSec=5
+KillMode=control-group
+OOMScoreAdjust=-300
+
+[Install]
+WantedBy=multi-user.target

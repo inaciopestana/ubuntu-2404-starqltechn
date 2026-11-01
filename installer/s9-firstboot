@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# s9-firstboot - interactive first-boot setup. Asks for the account and locale
+# settings, writes /etc/s9-ubports.conf, creates the account and installs the S9
+# overlay (via s9-apply-overlay). Nothing is sent anywhere; the password is only
+# passed to chpasswd as a hash.
+#
+#   s9-firstboot                 # ask questions (needs a terminal)
+#   s9-firstboot --conf FILE     # non-interactive: use FILE; set S9_PASSWORD_HASH in the environment
+#   options: --root DIR (target rootfs, default /), --repo DIR (default: parent of this script)
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+ROOT=/ REPO=$(cd "$HERE/.." && pwd) CONF=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --root) ROOT=$2; shift 2;;
+    --repo) REPO=$2; shift 2;;
+    --conf) CONF=$2; shift 2;;
+    -h|--help) sed -n '2,10p' "$0"; exit 0;;
+    *) echo "unknown option: $1" >&2; exit 2;;
+  esac
+done
+ROOT=${ROOT%/}; [ -n "$ROOT" ] || ROOT=/
+STATE=$ROOT/var/lib/s9-ubports/firstboot.done
+if [ -e "$STATE" ] && [ -z "$CONF" ]; then echo "already configured ($STATE). Remove it to run again."; exit 0; fi
+
+ask() {  # ask VAR "prompt" default [validation-regex]
+  local var=$1 prompt=$2 def=$3 re=${4:-.*} ans
+  while :; do
+    read -r -p "$prompt [$def]: " ans || exit 1
+    ans=${ans:-$def}
+    [[ $ans =~ $re ]] && { printf -v "$var" %s "$ans"; return; }
+    echo "  not valid, try again"
+  done
+}
+
+if [ -z "$CONF" ]; then
+  [ -t 0 ] || { echo "no terminal: use --conf FILE with S9_PASSWORD_HASH set" >&2; exit 1; }
+  echo "== Galaxy S9 / Ubuntu: first-boot setup =="
+  ask S9_USER     "User name (lower case)"             user       '^[a-z_][a-z0-9_-]{0,31}$'
+  [ "$S9_USER" != root ] || { echo "choose a normal user" >&2; exit 1; }
+  while :; do
+    read -r -s -p "Password: " P1; echo; read -r -s -p "Repeat password: " P2; echo
+    [ -n "$P1" ] && [ "$P1" = "$P2" ] && break
+    echo "  empty or different, try again"
+  done
+  ask S9_HOSTNAME "Host name"                          s9         '^[A-Za-z0-9][A-Za-z0-9-]{0,62}$'
+  ask S9_TZ       "Time zone (e.g. Europe/Berlin)"     UTC        '^[A-Za-z0-9_+/-]+$'
+  [ -e "$ROOT/usr/share/zoneinfo/$S9_TZ" ] || { echo "unknown time zone $S9_TZ" >&2; exit 1; }
+  ask S9_KEYMAP   "Keyboard layout (XKB, e.g. us, br, de)" us    '^[a-z]{2,3}$'
+  ask S9_KEYMAP_VARIANT "Layout variant (empty for none)" ""      '^[a-z0-9_-]*$'
+  ask S9_LOCALE   "Locale"                             en_US.UTF-8 '^[A-Za-z_]+\.[A-Za-z0-9-]+$'
+  S9_PASSWORD_HASH=$(printf '%s' "$P1" | openssl passwd -6 -stdin)
+  unset P1 P2
+  CONF=$(mktemp); trap 'rm -f "$CONF"' EXIT
+  {
+    echo "S9_USER=$S9_USER"; echo "S9_UID=1000"; echo "S9_HOME=/home/$S9_USER"
+    echo "S9_KEYMAP=$S9_KEYMAP"; [ -z "$S9_KEYMAP_VARIANT" ] || echo "S9_KEYMAP_VARIANT=$S9_KEYMAP_VARIANT"
+    echo "S9_LOCALE=$S9_LOCALE"; echo "S9_TZ=$S9_TZ"; echo "S9_HOSTNAME=$S9_HOSTNAME"
+  } > "$CONF"
+  export S9_PASSWORD_HASH
+fi
+
+install -D -m 0644 "$CONF" "$ROOT/etc/s9-ubports.conf"
+"$HERE/s9-apply-overlay" --root "$ROOT" --repo "$REPO" --conf "$ROOT/etc/s9-ubports.conf"
+install -D -m 0644 /dev/null "$STATE"
+echo "Setup finished. Reboot to start the desktop."

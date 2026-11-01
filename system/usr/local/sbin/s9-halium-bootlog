@@ -1,0 +1,63 @@
+#!/bin/sh
+
+sleep 15
+
+OUT=/var/log/s9-halium-firstboot.log
+
+{
+    echo "===== DATE ====="
+    date
+
+    echo
+    echo "===== UNAME ====="
+    uname -a
+
+    echo
+    echo "===== CMDLINE ====="
+    cat /proc/cmdline
+
+    echo
+    echo "===== SERVICES ====="
+    systemctl --no-pager --full status \
+        mount-android-system.service \
+        mount-android-partitions.service \
+        mount-halium-overlay.service \
+        lxc-android-config-mount-apexes.service \
+        lxc-android-config.service \
+        s9-gpu-permissions.service \
+        s9-lsc.service || true
+
+    echo
+    echo "===== LXC ====="
+    lxc-info -n android || true
+
+    echo
+    echo "===== MOUNTS ====="
+    mount | grep -E 'android|halium| /system | /vendor | /odm ' || true
+
+    echo
+    echo "===== GPU/BINDER ====="
+    ls -la \
+        /dev/ion \
+        /dev/kgsl-3d0 \
+        /dev/binder \
+        /dev/hwbinder \
+        /dev/vndbinder \
+        /dev/dri/* 2>&1 || true
+
+    echo
+    echo "===== GPU PERMISSION LOG ====="
+    cat /var/log/s9-gpu-permissions.log 2>/dev/null || true
+
+    echo
+    echo "===== JOURNAL ====="
+    journalctl -b --no-pager \
+        -u lxc-android-config.service \
+        -u s9-gpu-permissions.service \
+        -u s9-lsc.service || true
+
+    echo
+    echo "===== DMESG TAIL ====="
+    dmesg | tail -800
+
+} > "$OUT" 2>&1

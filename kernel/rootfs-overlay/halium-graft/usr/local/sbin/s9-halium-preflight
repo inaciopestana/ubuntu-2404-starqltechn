@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -u
+LOG=/var/log/s9-halium-preflight.log
+exec > >(tee -a "$LOG") 2>&1
+rc=0
+echo "===== S9 HALIUM PREFLIGHT $(date -Is 2>/dev/null || date) ====="
+for p in /vendor /vendor/firmware_mnt; do mountpoint -q "$p" && echo "OK mount $p" || { echo "FAIL mount $p"; rc=1; }; done
+for n in /dev/ion /dev/kgsl-3d0; do [[ -e "$n" ]] && ls -l "$n" || { echo "FAIL node $n"; rc=1; }; done
+binder_ok=0
+for n in /dev/binder /dev/hwbinder /dev/vndbinder /dev/binderfs/binder /dev/binderfs/hwbinder /dev/binderfs/vndbinder; do [[ -e "$n" ]] && { ls -l "$n"; binder_ok=1; }; done
+[[ "$binder_ok" == 1 ]] || { echo "FAIL binder nodes"; rc=1; }
+for p in /var/lib/lxc/android /usr/share/halium-overlay /usr/lib/lxc-android-config; do [[ -e "$p" ]] && echo "OK runtime $p" || echo "WARN runtime ausente: $p"; done
+exit "$rc"

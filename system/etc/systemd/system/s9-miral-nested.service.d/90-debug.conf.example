@@ -1,0 +1,8 @@
+# Optional diagnostics. Copy to 90-debug.conf (without .example) and restart the unit.
+# Both settings make the logs very large; /etc/logrotate.d/s9-miral-nested caps them at 50 MB x 3.
+[Service]
+# verbose Xwayland/X11 bridge logging in Mir
+Environment=MIR_X11_VERBOSE_LOG=1
+# keep core dumps of crashes under /var/crash/s9cores
+LimitCORE=infinity
+ExecStartPre=-+/bin/sh -c 'mkdir -p /var/crash/s9cores; echo /var/crash/s9cores/core.%%e.%%p.%%t > /proc/sys/kernel/core_pattern'

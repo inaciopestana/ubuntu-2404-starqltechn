@@ -1,0 +1,18 @@
+polkit.addRule(function(action, subject) {
+    var device = action.lookup("device");
+
+    if (
+        subject.user === "@S9_USER@" &&
+        device === "/dev/mmcblk0p1" &&
+        (
+            action.id ===
+              "org.freedesktop.udisks2.filesystem-mount" ||
+            action.id ===
+              "org.freedesktop.udisks2.filesystem-mount-system" ||
+            action.id ===
+              "org.freedesktop.udisks2.filesystem-mount-other-seat"
+        )
+    ) {
+        return polkit.Result.YES;
+    }
+});

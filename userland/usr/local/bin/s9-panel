@@ -1,0 +1,1201 @@
+#!/usr/bin/env python3
+# S9_PANEL_V1
+"""s9-panel: painel unico (icone na bandeja) com as funcoes que vem do Android no S9.
+
+Blocos: Telephony | SMS | Screen Cast (DLNA) | Screen Cast (Wi-Fi Direct) | Mobile Data | DexStation Fan
+- Telephony / SMS: o proprio app Phone (s9-telefone --embed) encaixado na janela por XEmbed.
+- Screen Cast / Mobile Data: as mesmas opcoes do menu do nm-applet modificado (s9-cast / s9-modem via sudo -n).
+- DexStation Fan: as mesmas opcoes da bandeja da ventoinha (s9-dex-fan).
+Uso: s9-panel [--background] [--toggle] [--show] [--page home|phone-tel|phone-sms|dlna|wifi|data|fan] [--no-tray] [--selftest]
+"""
+import json, os, re, shutil, subprocess, sys, threading, time
+import gi
+gi.require_version('Gtk', '3.0'); gi.require_version('Gdk', '3.0')
+from gi.repository import Gtk, Gdk, GLib, Gio, Pango
+try:
+    gi.require_version('GdkPixbuf', '2.0')
+    from gi.repository import GdkPixbuf
+except Exception:
+    GdkPixbuf = None
+
+APP_ID = 'br.s9.Panel'
+CONF = os.path.expanduser('~/.config/s9-panel/panel.conf')
+SM = ['sudo', '-n', '/usr/local/sbin/s9-modem']
+SC = ['sudo', '-n', '/usr/local/sbin/s9-cast']
+SF_BIN = '/usr/local/sbin/s9-dex-fan'
+SF = ['sudo', '-n', SF_BIN]
+PHONE_BIN = '/usr/local/bin/s9-telefone'
+TARGETS_FILE = '/run/s9-cast/targets.json'
+WTARGETS_FILE = '/run/s9-cast/mira-targets.json'
+FAN_MODE_FILE = '/var/lib/s9-dex-fan/mode'
+SNI = 'org.kde.StatusNotifierItem'
+WATCHER = 'org.kde.StatusNotifierWatcher'
+AVDELAYS = [(0, 'None'), (150, '150 ms'), (300, '300 ms'), (500, '500 ms'), (800, '800 ms')]
+POLL_S = 6
+PHONE_IDLE_QUIT_S = 180
+
+CSS = b"""
+button.tile { padding: 12px 8px; min-height: 92px; }
+label.tile-title { font-size: 17px; font-weight: bold; }
+label.tile-sub { opacity: 0.7; font-size: 12px; }
+label.dim { opacity: 0.65; }
+label.h1 { font-size: 18px; font-weight: bold; }
+label.sec { font-weight: bold; opacity: 0.8; }
+label.err { color: #d93025; font-weight: bold; }
+button.danger { background-image: none; background-color: #d93025; color: #fff; }
+button.act { min-height: 40px; }
+"""
+
+
+def log(*a):
+    print('S9-PANEL', *a, file=sys.stderr, flush=True)
+
+
+def read_conf():
+    d = {}
+    try:
+        with open(CONF) as f:
+            for line in f:
+                if '=' in line and not line.lstrip().startswith('#'):
+                    k, v = line.split('=', 1)
+                    d[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return d
+
+
+def parse_kv(out):
+    d = {}
+    for line in out.splitlines():
+        if '=' in line:
+            k, v = line.split('=', 1)
+            d[k.strip()] = v.strip()
+    return d
+
+
+def run(cmd, timeout=60):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, (r.stdout + r.stderr).strip()
+    except Exception as e:
+        return 1, str(e)
+
+
+def ui(fn, *a):
+    GLib.idle_add(lambda: (fn(*a), False)[1])
+
+
+def bg(work, done=None):
+    def t():
+        res = work()
+        if done:
+            ui(done, res)
+    threading.Thread(target=t, daemon=True).start()
+
+
+def notify(icon, title, msg):
+    if shutil.which('notify-send'):
+        subprocess.Popen(['notify-send', '-i', icon, title, msg])
+
+
+def clear(c):
+    for w in c.get_children():
+        c.remove(w)
+
+
+def label(text='', cls=None, xalign=0.0, wrap=False, ell=False, selectable=False):
+    l = Gtk.Label(label=text, xalign=xalign)
+    if cls:
+        l.get_style_context().add_class(cls)
+    if wrap:
+        l.set_line_wrap(True); l.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR); l.set_max_width_chars(40)
+    if ell:
+        l.set_ellipsize(Pango.EllipsizeMode.END)
+    if selectable:
+        l.set_selectable(True)
+    return l
+
+
+def button(text, cls=None, cb=None):
+    b = Gtk.Button(label=text)
+    b.get_style_context().add_class('act')
+    if cls:
+        b.get_style_context().add_class(cls)
+    if cb:
+        b.connect('clicked', cb)
+    return b
+
+
+def vis(w, flag):
+    w.set_no_show_all(True)
+    w.set_visible(bool(flag))
+
+
+# ============================================================ modelos (mesma logica do menu do nm-applet)
+class Mobile:
+    def __init__(self, on_change):
+        self.st, self.busy, self.on_change = {}, None, on_change
+
+    def refresh(self):
+        if not self.busy:
+            bg(lambda: run(SM + ['status'], 30), self._apply)
+
+    def _apply(self, r):
+        rc, out = r
+        self.st = {'error': out[:100]} if rc != 0 else parse_kv(out)
+        self.on_change()
+
+    def act(self, lab, *args):
+        if self.busy:
+            return
+        self.busy = lab
+        self.on_change()
+        bg(lambda: run(SM + list(args), 300), lambda r: self._done(lab, r))
+
+    def _done(self, lab, r):
+        rc, out = r
+        self.busy = None
+        last = out.splitlines()[-1] if out else ''
+        notify('network-cellular-signal-good-symbolic', 'Mobile Data',
+               ('%s: ok' % lab) if rc == 0 else ('%s: ERROR - %s' % (lab, last)))
+        self.on_change()
+        self.refresh()
+
+    def line1(self):
+        st = self.st
+        if 'error' in st: return 'Cannot query modem'
+        if st.get('state') != 'on': return 'Modem off (ofono stopped)'
+        if st.get('online') != 'true': return 'Modem radio off - not registered'
+        if st.get('reg') != 'registered': return 'Searching network (%s)' % (st.get('reg') or '?')
+        return '%s · %s' % (st.get('operator', '?'), st.get('tech', '?').upper())
+
+    def line2(self):
+        st = self.st
+        if 'error' in st: return st['error']
+        if st.get('data') == 'true': return 'Data: on (%s %s)' % (st.get('iface', ''), st.get('ip', ''))
+        return 'Data: off'
+
+
+class Cast:
+    def __init__(self, on_change):
+        self.st, self.busy, self.on_change = {}, None, on_change
+        self.targets, self.wtargets = [], []
+        self.scanning = self.wscanning = False
+        self.last_scan = self.wlast_scan = 0.0
+        self._fast = self._prev_tv = False
+        self.load_targets(); self.load_wtargets()
+
+    def sh(self, *args, timeout=60):
+        return run(SC + list(args), timeout)
+
+    @staticmethod
+    def _load(path, need_proto):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            return [t for t in data if isinstance(t, dict) and t.get('id') and t.get('name')
+                    and (not need_proto or 'cast' in t or 'dlna' in t)][:8]
+        except Exception:
+            return []
+
+    def load_targets(self):
+        self.targets = self._load(TARGETS_FILE, True)
+
+    def load_wtargets(self):
+        self.wtargets = self._load(WTARGETS_FILE, False)
+
+    def on(self): return self.st.get('state') in ('waiting', 'streaming', 'connecting')
+    def mode(self): return self.st.get('mode', '')
+    def don(self): return self.on() and self.mode() != 'wifi'
+    def won(self): return self.on() and self.mode() == 'wifi'
+
+    def proto_of(self, t):
+        pref = self.st.get('pref', 'gcast')
+        if pref == 'dlna' and 'dlna' in t: return 'dlna'
+        if pref == 'gcast' and 'cast' in t: return 'gcast'
+        return 'gcast' if 'cast' in t else 'dlna'
+
+    def dev_label(self, t):
+        return '%s (%s)' % (t['name'][:32], 'Google Cast' if self.proto_of(t) == 'gcast' else 'DLNA')
+
+    def refresh(self):
+        if not self.busy:
+            bg(lambda: self.sh('status', timeout=20), self._apply)
+
+    def _apply(self, r):
+        rc, out = r
+        self.st = {'error': out[:100]} if rc != 0 else parse_kv(out)
+        tv = self.st.get('mode') in ('tv', 'web', 'wifi')
+        if self._prev_tv and not tv and self.st.get('lasterr'):
+            self.notify('Stopped: ' + self.st['lasterr'])
+        self._prev_tv = tv
+        self.on_change()
+        if self.st.get('state') == 'connecting' and not self._fast:
+            self._fast = True
+            GLib.timeout_add_seconds(2, self._fast_poll)
+
+    def _fast_poll(self):
+        self._fast = False
+        self.refresh()
+        return False
+
+    def scan_maybe(self, force=False):
+        if self.scanning:
+            return
+        if not force and time.time() - self.last_scan < 8:
+            return
+        self.scanning = True
+        self.on_change()
+        def done(_):
+            self.scanning = False; self.last_scan = time.time(); self.load_targets(); self.on_change()
+        bg(lambda: self.sh('scan', timeout=45), done)
+
+    def wscan_maybe(self, force=False):
+        if self.wscanning or self.won():
+            return
+        if not force and time.time() - self.wlast_scan < 20:
+            return
+        self.wscanning = True
+        self.on_change()
+        def done(_):
+            self.wscanning = False; self.wlast_scan = time.time(); self.load_wtargets(); self.on_change()
+        bg(lambda: self.sh('wifi-scan', timeout=60), done)
+
+    def act(self, lab, *args):
+        if self.busy:
+            return
+        self.busy = lab
+        self.on_change()
+        bg(lambda: self.sh(*args), lambda r: self._done(lab, r))
+
+    @staticmethod
+    def notify(msg):
+        notify('video-display-symbolic', 'Screen Cast', msg)
+
+    def _done(self, lab, r):
+        rc, out = r
+        self.busy = None
+        last = out.splitlines()[-1] if out else ''
+        if rc != 0: self.notify('%s: ERROR - %s' % (lab, last))
+        elif last.startswith('srt://'): self.notify('Screen cast on: %s - waiting for a viewer' % last.split(' ')[0])
+        elif last.startswith('wifi:'): self.notify(last[5:].strip())
+        elif last.startswith('tv:'): self.notify(lab + '...')
+        elif last.startswith('web:'): self.notify("Open this address in the tablet's browser: " + last[4:].strip())
+        else: self.notify('%s: ok' % lab)
+        self.on_change()
+        self.refresh()
+
+    def _copy(self, sub, fname, ok_msg, check):
+        def work():
+            rc, out = self.sh(sub, timeout=20)
+            ok = False
+            if rc == 0 and out and check(out):
+                try:
+                    ok = subprocess.run(['xclip', '-selection', 'clipboard'], input=out, text=True, timeout=10,
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+                except Exception as e:
+                    log('xclip:', e)
+                if not ok:
+                    try:
+                        fd = os.open(os.path.expanduser(fname), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(fd, 'w') as f:
+                            f.write(out + '\n')
+                        ui(self.notify, 'Clipboard unavailable; saved to ' + fname)
+                        return
+                    except Exception as e:
+                        log('salvar:', e)
+            ui(self.notify, ok_msg if ok else 'Could not get it (is a cast active?)')
+        threading.Thread(target=work, daemon=True).start()
+
+    def copy_cmd(self): self._copy('cmd', '~/s9-cast-viewer.txt', 'Viewer command copied to the clipboard', lambda o: True)
+    def copy_web(self): self._copy('weburl', '~/s9-cast-web-address.txt', 'Browser address copied', lambda o: o.startswith('http'))
+
+    # ---- textos (iguais aos do menu) ----
+    def line1(self):
+        st = self.st
+        if 'error' in st: return 'Cannot query: ' + st['error'][:60]
+        if self.mode() == 'wifi': return 'Not casting here (a Wi-Fi display is active)'
+        if self.mode() == 'web':
+            n = st.get('clients', '0')
+            if st.get('state') == 'streaming':
+                return 'Showing in a browser (%s viewer%s)' % (n, '' if n == '1' else 's')
+            return 'Waiting for a browser to open this address:'
+        if self.mode() == 'tv':
+            who = st.get('target') or 'TV'
+            if st.get('state') == 'streaming':
+                return 'Casting to %s (%s)' % (who[:28], 'Google Cast' if st.get('proto') == 'gcast' else 'DLNA')
+            return 'Connecting to %s...' % who[:28]
+        if st.get('state') == 'streaming':
+            txt = 'Streaming'
+            try: txt += ' %d fps' % round(float(st.get('fps', '')))
+            except Exception: pass
+            if st.get('bitrate'): txt += ', ' + st['bitrate']
+            return txt
+        if st.get('state') == 'waiting': return 'Waiting for a viewer'
+        if st.get('lasterr'): return 'Error: ' + st['lasterr'][:60]
+        return 'Not casting'
+
+    def line2(self):
+        st = self.st
+        if self.mode() == 'web' and st.get('weburl'): return st['weburl']
+        return 'srt://%s:%s (encrypted)' % (st.get('ip') or '?', st.get('port', '5000'))
+
+    def wline1(self):
+        st = self.st
+        if 'error' in st: return 'Cannot query: ' + st['error'][:60]
+        if self.won():
+            who = (st.get('target') or 'display')[:28]
+            if st.get('state') == 'streaming':
+                return 'Casting to %s%s' % (who, (' (%s)' % st['res']) if st.get('res') else '')
+            return st.get('step') or ('Connecting to %s...' % who)
+        if self.wscanning: return 'Searching for displays...'
+        return 'Not casting'
+
+
+class Fan:
+    MODES = [('auto', 'Auto'), ('high', 'High'), ('medium', 'Medium'), ('low', 'Low'), ('off', 'Off')]
+
+    def __init__(self, on_change):
+        self.st, self.busy, self.on_change = {}, None, on_change
+
+    def refresh(self):
+        bg(self._read, self._apply)
+
+    @staticmethod
+    def _read():
+        rc, out = run([SF_BIN, 'status'], 15)
+        d = {'raw_rc': rc}
+        for line in out.splitlines():
+            m = re.match(r'\s*(dock|temperatura|modo)\s*:\s*(.*)$', line)
+            if m:
+                d[m.group(1)] = m.group(2).strip()
+        try:
+            with open(FAN_MODE_FILE) as f:
+                d['mode'] = f.read().strip()
+        except OSError:
+            d['mode'] = (d.get('modo') or '').split()[0] if d.get('modo') else ''
+        t = re.match(r'([\d.]+)', d.get('temperatura', ''))
+        d['temp'] = t.group(1) if t else ''
+        d['dock_ok'] = ('dock' in d) and ('nao' not in d['dock'].lower()) and ('não' not in d['dock'].lower())
+        return d
+
+    def _apply(self, d):
+        self.st = d
+        self.on_change()
+
+    def act(self, mode):
+        if self.busy:
+            return
+        self.busy = mode
+        self.on_change()
+        def work():
+            r = run(SF + [mode], 30)
+            if mode == 'auto' and r[0] == 0:
+                run(SF + ['enable'], 30)
+            return r
+        def done(r):
+            self.busy = None
+            if r[0] != 0:
+                notify('dialog-error', 'DexStation Fan', 'ERROR - ' + (r[1].splitlines()[-1] if r[1] else mode))
+            self.on_change()
+            self.refresh()
+        bg(work, done)
+
+    def summary(self):
+        st = self.st
+        if not st: return 'Reading...'
+        m = dict(self.MODES).get(st.get('mode', ''), st.get('mode', '') or '?')
+        s = m
+        if st.get('temp'): s += ' · %s °C' % st['temp']
+        if not st.get('dock_ok'): s += ' · no dock'
+        return s
+
+
+# ============================================================ widgets
+class Seg(Gtk.Box):
+    """Botoes ligados (um ativo). set_value reflete o modelo; o clique so dispara on_pick."""
+    def __init__(self, items, on_pick):
+        super().__init__(spacing=0)
+        self.get_style_context().add_class('linked')
+        self.on_pick, self.btns, self.cur, self._sync = on_pick, {}, None, False
+        for v, text in items:
+            b = Gtk.ToggleButton(label=text)
+            b.connect('toggled', self._tog, v)
+            self.pack_start(b, True, True, 0)
+            self.btns[v] = b
+
+    def _tog(self, b, v):
+        if self._sync:
+            return
+        self._revert()
+        self.on_pick(v)
+
+    def _revert(self):
+        self._sync = True
+        for k, b in self.btns.items():
+            b.set_active(k == self.cur)
+        self._sync = False
+
+    def set_value(self, v, enabled=True):
+        self.cur = v
+        self._revert()
+        for b in self.btns.values():
+            b.set_sensitive(bool(enabled))
+
+
+class TargetList(Gtk.Box):
+    """Lista vertical de alvos (TVs / telas); o ativo fica marcado."""
+    def __init__(self, on_pick):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.on_pick, self.sig, self._sync = on_pick, None, False
+
+    def fill(self, items, enabled):
+        sig = (tuple(items), bool(enabled))
+        if sig == self.sig:
+            return
+        self.sig = sig
+        clear(self)
+        for tid, text, act in items:
+            b = Gtk.ToggleButton(label=text)
+            b.get_style_context().add_class('act')
+            b.get_child().set_halign(Gtk.Align.START)
+            b.set_active(bool(act)); b.set_sensitive(bool(enabled))
+            b.connect('toggled', self._tog, tid, bool(act))
+            self.pack_start(b, False, False, 0)
+        self.show_all()
+
+    def _tog(self, b, tid, was):
+        if self._sync:
+            return
+        self._sync = True; b.set_active(was); self._sync = False
+        self.on_pick(tid)
+
+
+class Tile(Gtk.Button):
+    def __init__(self, title, cb):
+        super().__init__()
+        self.get_style_context().add_class('tile')
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.set_valign(Gtk.Align.CENTER)
+        self.sub = label(' ', 'tile-sub', 0.5, ell=True)
+        box.pack_start(label(title, 'tile-title', 0.5, wrap=True), False, False, 0)
+        box.pack_start(self.sub, False, False, 0)
+        self.add(box)
+        self.connect('clicked', lambda b: cb())
+
+    def set_sub(self, text):
+        self.sub.set_text(text or ' ')
+
+
+def scrolled(child):
+    s = Gtk.ScrolledWindow()
+    s.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    s.set_vexpand(True)
+    s.add(child)
+    return s
+
+
+def page_box():
+    b = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    b.set_margin_start(14); b.set_margin_end(14); b.set_margin_top(10); b.set_margin_bottom(14)
+    return b
+
+
+# ============================================================ Phone encaixado (XEmbed)
+class PhonePage(Gtk.Box):
+    LOGF = '/tmp/s9-panel-phone-embed.log'
+
+    def __init__(self):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.proc, self.xid, self.buf, self.pending_tab, self.embedded = None, None, b'', 'teclado', False
+        self.stack = Gtk.Stack()
+        wait = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        wait.set_valign(Gtk.Align.CENTER)
+        self.msg = label('Starting Phone...', 'dim', 0.5, wrap=True)
+        self.retry = button('Restart Phone view', None, lambda b: self.start())
+        wait.pack_start(self.msg, False, False, 0)
+        wait.pack_start(self.retry, False, False, 0)
+        self.sock = Gtk.Socket()
+        self.sock.connect('plug-added', self._on_added)
+        self.sock.connect('plug-removed', lambda *a: True)
+        self.stack.add_named(wait, 'wait')
+        self.stack.add_named(self.sock, 'view')
+        self.pack_start(self.stack, True, True, 0)
+        self.show_all()
+        vis(self.retry, False)
+
+    def running(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def open(self, tab):
+        self.pending_tab = tab
+        if self.running():
+            if self.embedded:
+                self.send('tab %s' % tab)
+            return
+        self.start()
+
+    def start(self):
+        self.stop(wait=True)
+        vis(self.retry, False)
+        self.msg.set_text('Starting Phone...')
+        self.stack.set_visible_child_name('wait')
+        env = dict(os.environ, GDK_BACKEND='x11')
+        try:
+            logf = open(self.LOGF, 'ab')
+            self.proc = subprocess.Popen([PHONE_BIN, '--embed'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=logf, env=env)
+        except Exception as e:
+            self.proc = None
+            self.msg.set_text('Could not start Phone: %s' % e); vis(self.retry, True)
+            return
+        self.xid, self.buf, self.embedded = None, b'', False
+        os.set_blocking(self.proc.stdout.fileno(), False)
+        GLib.io_add_watch(self.proc.stdout.fileno(), GLib.IO_IN | GLib.IO_HUP | GLib.IO_ERR, self._on_out, self.proc)
+        GLib.timeout_add_seconds(12, self._start_timeout, self.proc)
+
+    def _start_timeout(self, proc):
+        if proc is self.proc and not self.embedded:
+            self.msg.set_text('Phone did not show up (log: %s)' % self.LOGF); vis(self.retry, True)
+        return False
+
+    def _on_out(self, fd, cond, proc):
+        if proc is not self.proc:
+            return False
+        try:
+            data = os.read(fd, 4096)
+        except (BlockingIOError, InterruptedError):
+            return True
+        except OSError:
+            data = b''
+        if not data:
+            self._died()
+            return False
+        self.buf += data
+        while b'\n' in self.buf:
+            line, self.buf = self.buf.split(b'\n', 1)
+            m = re.match(rb'XID (\d+)', line.strip())
+            if m and not self.xid:
+                self.xid = int(m.group(1))
+                log('Phone XID', self.xid)
+                # o Gtk.Socket so e realizado (ganha janela X) quando esta visivel: mostrar a pagina ANTES do add_id
+                self.stack.set_visible_child_name('view')
+                GLib.timeout_add(250, self._try_add, self.xid, 0)
+        return True
+
+    def _try_add(self, xid, n):
+        # Gtk.Socket so aceita add_id depois de realizado; add_id falha em silencio se a janela ainda nao existe no X.
+        if xid != self.xid or self.embedded:
+            return False
+        if not self.sock.get_realized():
+            if n == 3:
+                log('Gtk.Socket ainda nao realizado (painel visivel? %s)' % self.get_mapped())
+            if n < 20:
+                GLib.timeout_add(300, self._try_add, xid, n + 1)
+            else:
+                self.stack.set_visible_child_name('wait')
+                self.msg.set_text('Could not attach the Phone window (panel not visible?)'); vis(self.retry, True)
+            return False
+        if n >= 2:
+            self.send('show')  # plano B: mapeia a janela do Phone antes de encaixar (pisca por um instante)
+        log('add_id xid=%s tentativa %d' % (xid, n + 1))
+        self.sock.add_id(xid)
+        if not self.embedded:
+            if n < 8:
+                GLib.timeout_add(400, self._try_add, xid, n + 1)
+            else:
+                log('add_id sem plug-added apos %d tentativas' % (n + 1))
+                self.stack.set_visible_child_name('wait')
+                self.msg.set_text('Could not attach the Phone window (see %s)' % self.LOGF); vis(self.retry, True)
+        return False
+
+    def _died(self):
+        log('Phone embutido terminou')
+        self.proc, self.xid, self.embedded = None, None, False
+        self.msg.set_text('Phone view closed.'); vis(self.retry, True)
+        self.stack.set_visible_child_name('wait')
+
+    def _on_added(self, sock):
+        log('plug-added: Phone encaixado')
+        self.embedded = True
+        self.send('show')
+        self.send('tab %s' % self.pending_tab)
+        self.stack.set_visible_child_name('view')
+        GLib.timeout_add(1500, self._check_mapped)
+
+    def _check_mapped(self):
+        pw = self.sock.get_plug_window()
+        if self.xid and pw is not None and not pw.is_viewable() and shutil.which('xdotool'):
+            log('janela do Phone nao ficou visivel; mapeando por xdotool')
+            subprocess.Popen(['xdotool', 'windowmap', str(self.xid)])
+        return False
+
+    def send(self, line):
+        if not self.running():
+            return
+        try:
+            self.proc.stdin.write((line + '\n').encode()); self.proc.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+
+    def stop(self, wait=False):
+        p = self.proc
+        if not p:
+            return
+        self.send('quit')
+        self.proc, self.xid, self.embedded = None, None, False
+        def reap():
+            try:
+                p.wait(timeout=2)
+            except Exception:
+                try: p.kill()
+                except Exception: pass
+        threading.Thread(target=reap, daemon=True).start()
+
+
+# ============================================================ janela do painel
+class PanelWindow(Gtk.Window):
+    def __init__(self, app):
+        super().__init__(title='S9 Panel')
+        self.app = app
+        self.set_default_size(480, 800)
+        self.set_position(Gtk.WindowPosition.CENTER)
+        cfg_icon = read_conf().get('icon', '')
+        pbs = [] if cfg_icon else icon_pixbufs()
+        if pbs:
+            self.set_icon_list(pbs)                      # S9_PANEL_ICON: mesmo icone da bandeja (4 quadrados brancos)
+            Gtk.Window.set_default_icon_list(pbs)
+        else:
+            self.set_icon_name(cfg_icon or 's9-panel')
+        prov = Gtk.CssProvider(); prov.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.mob = Mobile(self.update_all)
+        self.cast = Cast(self.update_all)
+        self.fan = Fan(self.update_all)
+        self.page, self.poll_id, self.hidden_since = 'home', None, time.time()
+        self.titles = {'home': 'S9 Panel', 'phone-tel': 'Telephony', 'phone-sms': 'SMS', 'dlna': 'Screen Cast (DLNA)',
+                       'wifi': 'Screen Cast (Wi-Fi Direct)', 'data': 'Mobile Data', 'fan': 'DexStation Fan'}
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        head = Gtk.Box(spacing=8)
+        head.set_margin_start(10); head.set_margin_end(10); head.set_margin_top(8); head.set_margin_bottom(4)
+        self.back = button('‹ Back', None, lambda b: self.goto('home'))
+        self.title = label('S9 Panel', 'h1')
+        head.pack_start(self.back, False, False, 0)
+        head.pack_start(self.title, True, True, 0)
+        self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.stack.set_vexpand(True)
+        self.phone = PhonePage()
+        self.stack.add_named(self.build_home(), 'home')
+        self.stack.add_named(self.phone, 'phone')
+        self.stack.add_named(self.build_dlna(), 'dlna')
+        self.stack.add_named(self.build_wifi(), 'wifi')
+        self.stack.add_named(self.build_data(), 'data')
+        self.stack.add_named(self.build_fan(), 'fan')
+        outer.pack_start(head, False, False, 0)
+        outer.pack_start(self.stack, True, True, 0)
+        self.add(outer)
+        # o Gtk.Stack escolhe como inicial a 1a pagina ja visivel ao ser adicionada (era a do Phone): fixar a home
+        self.stack.show_all()
+        self.sync_stack()
+        self.shown = False                                   # S9_PANEL_DOCK
+        self.connect('delete-event', self._on_delete)
+        self.connect('window-state-event', self._on_wstate)
+        self.connect('unmap-event', self._on_unmap_ev)
+        self.connect('key-press-event', self._on_key)
+        if app:
+            app.add_window(self)
+        GLib.timeout_add_seconds(20, self._idle_check)
+        self.update_all()
+
+    # ---------------------------------------------------------- navegacao
+    def _on_delete(self, *a):
+        self.hide_panel()
+        return True
+
+    def _on_key(self, w, ev):
+        if ev.keyval == Gdk.KEY_Escape:
+            if self.page != 'home': self.goto('home')
+            else: self.hide_panel()
+            return True
+        return False
+
+    def sync_stack(self):
+        key = 'phone' if self.page.startswith('phone') else self.page
+        self.stack.set_visible_child_name(key)
+        self.title.set_text(self.titles.get(self.page, 'S9 Panel'))
+        self.back.set_visible(self.page != 'home')
+
+    def goto(self, page):
+        if page not in self.titles:
+            page = 'home'
+        self.page = page
+        self.title.set_text(self.titles[page])
+        self.back.set_visible(page != 'home')
+        if page.startswith('phone'):
+            self.stack.set_visible_child_name('phone')
+            self.phone.open('mensagens' if page == 'phone-sms' else 'teclado')
+        else:
+            self.stack.set_visible_child_name(page)
+        if page == 'dlna': self.cast.scan_maybe()
+        if page == 'wifi': self.cast.wscan_maybe()
+        self.refresh_all()
+        self.update_all()
+
+    def show_panel(self, page=None):
+        self.shown = True
+        self.deiconify()
+        self.show_all()
+        self.sync_stack()
+        self.present()
+        self.start_polling()
+        if page:
+            self.goto(page)
+
+    def hide_panel(self):
+        # fechar/minimizar: destruir a janela X (unrealize) para ela SAIR da docklike; reabrir cria outra
+        self.shown = False
+        self.hide()
+        self.deiconify()      # S9_PANEL_ICONIFY: o GTK guarda 'minimizada' no hide e reabre a proxima janela ja minimizada (laco)
+        self.hidden_since = time.time()
+        self.phone.stop()                    # o Phone encaixado morre junto com a janela X do painel
+        self.page = 'home'
+        self.sync_stack()
+        GLib.timeout_add(150, self._release_x)
+
+    def _release_x(self):
+        if not self.shown and self.get_realized():
+            self.unrealize()
+            log('janela X destruida (sai da docklike)')
+        return False
+
+    def _on_wstate(self, w, ev):
+        if self.shown and (ev.changed_mask & Gdk.WindowState.ICONIFIED) and (ev.new_window_state & Gdk.WindowState.ICONIFIED):
+            log('janela minimizada: fechando para sair da docklike')
+            GLib.idle_add(self.hide_panel)
+        return False
+
+    def _on_unmap_ev(self, w, ev):
+        if self.shown:
+            log('janela desmapeada pelo gerenciador: fechando para sair da docklike')
+            GLib.idle_add(self.hide_panel)
+        return False
+
+    def toggle(self, page=None):
+        if self.get_visible():
+            self.hide_panel()
+        else:
+            self.show_panel(page)
+
+    def _idle_check(self):
+        if not self.get_visible() and self.phone.running() and time.time() - self.hidden_since > PHONE_IDLE_QUIT_S:
+            log('painel escondido ha muito tempo: encerrando a copia encaixada do Phone')
+            self.phone.stop()
+        return True
+
+    def start_polling(self):
+        if self.poll_id:
+            return
+        self.refresh_all()
+        self.poll_id = GLib.timeout_add_seconds(POLL_S, self._poll)
+
+    def _poll(self):
+        if not self.get_visible():
+            self.poll_id = None
+            return False
+        self.refresh_all()
+        return True
+
+    def refresh_all(self):
+        self.mob.refresh(); self.cast.refresh(); self.fan.refresh()
+
+    # ---------------------------------------------------------- home
+    def build_home(self):
+        g = Gtk.Grid(row_spacing=10, column_spacing=10, row_homogeneous=True, column_homogeneous=True)
+        g.set_margin_start(14); g.set_margin_end(14); g.set_margin_top(10); g.set_margin_bottom(14)
+        self.tiles = {}
+        spec = [('phone-tel', 'Telephony'), ('phone-sms', 'SMS'), ('dlna', 'Screen Cast (DLNA)'),
+                ('wifi', 'Screen Cast (Wi-Fi Direct)'), ('data', 'Mobile Data'), ('fan', 'DexStation Fan')]
+        for i, (key, title) in enumerate(spec):
+            t = Tile(title, lambda k=key: self.goto(k))
+            g.attach(t, i % 2, i // 2, 1, 1)
+            self.tiles[key] = t
+        return g
+
+    # ---------------------------------------------------------- Screen Cast (DLNA)
+    def build_dlna(self):
+        b = page_box()
+        self.d_l1 = label('', None, wrap=True); self.d_l2 = label('', 'dim', wrap=True, selectable=True)
+        self.d_busy = label('', 'dim')
+        self.d_stop = button('Stop casting', 'danger', lambda x: self.cast.act('Stopping screen cast', 'stop'))
+        self.d_sec = label('Cast screen to:', 'sec')
+        self.d_list = TargetList(self.dlna_pick)
+        self.d_web = Gtk.ToggleButton(label='Web browser (tablet, any device)')
+        self.d_web.get_style_context().add_class('act')
+        self.d_web._sync = False
+        self.d_web.connect('toggled', self.dlna_web)
+        self.d_none = label('', 'dim')
+        self.d_search = button('Search for TVs again', None, lambda x: self.cast.scan_maybe(True))
+        self.d_srt = button('Start SRT stream (PC / VLC)', None, lambda x: self.cast.act('Starting screen cast', 'start'))
+        self.d_cpcmd = button('Copy SRT viewer command', None, lambda x: self.cast.copy_cmd())
+        self.d_cpweb = button('Copy browser address', None, lambda x: self.cast.copy_web())
+        self.d_q = Seg([('normal', 'Normal (1080p)'), ('light', 'Light (720p)')], lambda v: self.cast.act('Setting quality', 'quality', v))
+        self.d_p = Seg([('gcast', 'Google Cast'), ('dlna', 'DLNA')], lambda v: self.cast.act('Setting protocol', 'proto', v))
+        self.d_av_t = label('Sound delay (sync with picture):', 'sec')
+        self.d_av = Seg([(v, t) for v, t in AVDELAYS], lambda v: self.cast.act('Setting sound delay', 'avoffset', str(v)))
+        for w in (self.d_l1, self.d_l2, self.d_busy, self.d_stop, self.d_sec, self.d_list, self.d_web, self.d_none, self.d_search,
+                  self.d_srt, self.d_cpcmd, self.d_cpweb, label('Quality', 'sec'), self.d_q, label('TV protocol', 'sec'), self.d_p,
+                  self.d_av_t, self.d_av):
+            b.pack_start(w, False, False, 0)
+        return scrolled(b)
+
+    def dlna_pick(self, tid):
+        c = self.cast
+        if c.on() and c.mode() == 'tv' and c.st.get('target_id') == tid:
+            c.act('Stopping screen cast', 'stop')
+        else:
+            t = next((x for x in c.targets if x['id'] == tid), {'name': 'TV'})
+            c.act('Connecting to ' + t['name'][:28], 'tv', tid)
+
+    def dlna_web(self, btn):
+        if self.d_web._sync:
+            return
+        c = self.cast
+        self._set_toggle(self.d_web, c.don() and c.mode() == 'web')
+        if c.on() and c.mode() == 'web':
+            c.act('Stopping screen cast', 'stop')
+        else:
+            c.act('Starting web viewer', 'web')
+
+    @staticmethod
+    def _set_toggle(btn, active):
+        btn._sync = True
+        btn.set_active(bool(active))
+        btn._sync = False
+
+    def update_dlna(self):
+        c, cs = self.cast, self.cast.st
+        con, cbusy = c.don(), bool(c.busy)
+        self.d_l1.set_text(c.line1())
+        self.d_l2.set_text(c.line2()); vis(self.d_l2, con and c.mode() in ('srt', 'web'))
+        self.d_busy.set_text((c.busy or '') + '...'); vis(self.d_busy, cbusy)
+        vis(self.d_stop, con and not cbusy)
+        items = [(t['id'], c.dev_label(t), con and c.mode() == 'tv' and cs.get('target_id') == t['id']) for t in c.targets]
+        self.d_list.fill(items, not cbusy)
+        self._set_toggle(self.d_web, con and c.mode() == 'web'); self.d_web.set_sensitive(not cbusy)
+        self.d_none.set_text('Searching for TVs...' if c.scanning else 'No TVs found on this network')
+        vis(self.d_none, c.scanning or not c.targets)
+        vis(self.d_search, (not c.scanning) and (not cbusy))
+        vis(self.d_srt, (not con) and not cbusy)
+        self.d_cpcmd.set_sensitive(not cbusy); self.d_cpweb.set_sensitive(not cbusy)
+        self.d_q.set_value(cs.get('quality', 'normal'), not cbusy)
+        self.d_p.set_value(cs.get('pref', 'gcast'), not cbusy)
+        try: avo = int(cs.get('av_offset', '0'))
+        except ValueError: avo = 0
+        known = avo in dict(AVDELAYS)
+        self.d_av_t.set_text('Sound delay (sync with picture):' if known else 'Sound delay: %+d ms (custom)' % avo)
+        self.d_av.set_value(avo if known else None, not cbusy)
+
+    # ---------------------------------------------------------- Screen Cast (Wi-Fi Direct)
+    def build_wifi(self):
+        b = page_box()
+        self.w_l1 = label('', None, wrap=True); self.w_busy = label('', 'dim')
+        self.w_stop = button('Stop casting', 'danger', lambda x: self.cast.act('Stopping screen cast', 'stop'))
+        self.w_sec = label('Cast screen to:', 'sec')
+        self.w_list = TargetList(self.wifi_pick)
+        self.w_none = label('', 'dim')
+        self.w_search = button('Search for displays again', None, lambda x: self.cast.wscan_maybe(True))
+        self.w_q = Seg([('normal', 'Normal (1080p if supported)'), ('light', 'Light (720p)')],
+                       lambda v: self.cast.act('Setting quality', 'quality', v))
+        for w in (self.w_l1, self.w_busy, self.w_stop, self.w_sec, self.w_list, self.w_none, self.w_search,
+                  label('Quality', 'sec'), self.w_q):
+            b.pack_start(w, False, False, 0)
+        return scrolled(b)
+
+    def wifi_pick(self, tid):
+        c = self.cast
+        if c.won() and c.st.get('target_id') == tid:
+            c.act('Stopping screen cast', 'stop')
+        else:
+            t = next((x for x in c.wtargets if x['id'] == tid), {'name': 'display'})
+            c.act('Connecting to ' + t['name'][:28], 'wifi', tid)
+
+    def update_wifi(self):
+        c, cs = self.cast, self.cast.st
+        won, cbusy = c.won(), bool(c.busy)
+        self.w_l1.set_text(c.wline1())
+        self.w_busy.set_text((c.busy or '') + '...'); vis(self.w_busy, cbusy)
+        vis(self.w_stop, won and not cbusy)
+        self.w_list.fill([(t['id'], t['name'][:32], won and cs.get('target_id') == t['id']) for t in c.wtargets], not cbusy)
+        self.w_none.set_text('Searching for displays...' if c.wscanning else 'No Wi-Fi displays found')
+        vis(self.w_none, c.wscanning or not c.wtargets)
+        vis(self.w_search, (not won) and (not cbusy) and (not c.wscanning))
+        self.w_q.set_value(cs.get('quality', 'normal'), not cbusy)
+
+    # ---------------------------------------------------------- Mobile Data
+    def build_data(self):
+        b = page_box()
+        self.m_l1 = label('', 'h1', wrap=True); self.m_l2 = label('', 'dim', wrap=True); self.m_busy = label('', 'dim')
+        m = self.mob
+        self.m_btn = {}
+        spec = [('off', 'Turn data off', ('Turning data off', 'down')),
+                ('prim', 'Use SIM as primary connection', ('Switching to primary', 'up', 'primary')),
+                ('back', 'Use SIM as Wi-Fi backup', ('Switching to backup', 'up', 'backup')),
+                ('on_b', 'Turn data on (Wi-Fi backup)', ('Turning data on', 'up', 'backup')),
+                ('on_p', 'Turn data on (primary)', ('Turning data on', 'up', 'primary')),
+                ('pon', 'Power on modem (register only)', ('Powering on modem', 'on')),
+                ('poff', 'Power off modem (stop ofono)', ('Powering off modem', 'off'))]
+        for w in (self.m_l1, self.m_l2, self.m_busy):
+            b.pack_start(w, False, False, 0)
+        for key, text, args in spec:
+            btn = button(text, None, lambda x, a=args: self.mob.act(*a))
+            self.m_btn[key] = btn
+            b.pack_start(btn, False, False, 0)
+        return scrolled(b)
+
+    def update_data(self):
+        m = self.mob; st = m.st
+        on, data, online, busy = st.get('state') == 'on', st.get('data') == 'true', st.get('online') == 'true', bool(m.busy)
+        self.m_l1.set_text(m.line1()); self.m_l2.set_text(m.line2())
+        self.m_busy.set_text((m.busy or '') + '...'); vis(self.m_busy, busy)
+        vis(self.m_btn['off'], data and not busy); vis(self.m_btn['prim'], data and not busy)
+        vis(self.m_btn['back'], data and not busy)
+        vis(self.m_btn['on_b'], (not data) and not busy); vis(self.m_btn['on_p'], (not data) and not busy)
+        vis(self.m_btn['pon'], (not online) and not busy); vis(self.m_btn['poff'], on and not busy)
+
+    # ---------------------------------------------------------- DexStation Fan
+    def build_fan(self):
+        b = page_box()
+        self.f_l1 = label('', 'h1', wrap=True); self.f_l2 = label('', 'dim', wrap=True); self.f_busy = label('', 'dim')
+        self.f_seg = Seg([(k, t) for k, t in Fan.MODES], lambda v: self.fan.act(v))
+        self.f_note = label('Auto raises the speed by CPU/GPU temperature. The dock does not report RPM; confirm by sound.',
+                            'dim', wrap=True)
+        for w in (self.f_l1, self.f_l2, self.f_busy, self.f_seg, self.f_note):
+            b.pack_start(w, False, False, 0)
+        return scrolled(b)
+
+    def update_fan(self):
+        f = self.fan; st = f.st
+        self.f_l1.set_text(('Fan: %s' % dict(Fan.MODES).get(st.get('mode', ''), st.get('mode') or '?')) if st else 'Reading...')
+        parts = []
+        if st.get('temp'): parts.append('%s °C (max CPU/GPU)' % st['temp'])
+        if st: parts.append('Dock connected' if st.get('dock_ok') else 'Dock not detected (the setting is kept for when it is attached)')
+        self.f_l2.set_text(' · '.join(parts))
+        self.f_busy.set_text('Applying %s...' % f.busy if f.busy else ''); vis(self.f_busy, bool(f.busy))
+        self.f_seg.set_value(st.get('mode') if st.get('mode') in dict(Fan.MODES) else None, not f.busy)
+
+    # ---------------------------------------------------------- atualizacao geral
+    def update_all(self):
+        c, m, f = self.cast, self.mob, self.fan
+        try:
+            self.tiles['phone-tel'].set_sub(m.line1() if m.st and 'error' not in m.st else 'Calls and keypad')
+            self.tiles['phone-sms'].set_sub('Messages')
+            self.tiles['dlna'].set_sub('Not casting here' if c.mode() == 'wifi' else c.line1() if c.st else '')
+            self.tiles['wifi'].set_sub(c.wline1() if c.st else '')
+            self.tiles['data'].set_sub(m.line2() if m.st else '')
+            self.tiles['fan'].set_sub(f.summary())
+            self.update_dlna(); self.update_wifi(); self.update_data(); self.update_fan()
+        except Exception:
+            import traceback
+            log(traceback.format_exc())
+
+
+# ============================================================ icone de bandeja (StatusNotifierItem direto)
+def make_pixmaps(sizes=(22, 32, 48)):
+    """Icone branco (4 quadrados arredondados) em ARGB32; sem arquivos nem tema."""
+    out = []
+    for size in sizes:
+        ss = 4; n = size * ss
+        sq = round(n * 0.36); gap = round(n * 0.10); off = (n - 2 * sq - gap) // 2; r = n * 0.08
+        rects = [(off, off), (off + sq + gap, off), (off, off + sq + gap), (off + sq + gap, off + sq + gap)]
+        def inside(x, y):
+            for cx, cy in rects:
+                if cx <= x < cx + sq and cy <= y < cy + sq:
+                    px = min(max(x, cx + r), cx + sq - r); py = min(max(y, cy + r), cy + sq - r)
+                    if (x - px) ** 2 + (y - py) ** 2 <= r * r:
+                        return True
+            return False
+        data = bytearray()
+        for y in range(size):
+            for x in range(size):
+                cov = sum(1 for sy in range(ss) for sx in range(ss) if inside(x * ss + sx + 0.5, y * ss + sy + 0.5))
+                a = round(255 * cov / (ss * ss))
+                data += bytes((a, 255, 255, 255))
+        out.append((size, size, bytes(data)))
+    return out
+
+
+def icon_pixbufs(sizes=(16, 22, 32, 48, 64)):
+    """Os mesmos pixels do icone da bandeja, como GdkPixbuf (janela / dock)."""
+    if GdkPixbuf is None:
+        return []
+    out = []
+    for w, h, argb in make_pixmaps(sizes):
+        rgba = bytearray()
+        for i in range(0, len(argb), 4):
+            rgba += bytes((255, 255, 255, argb[i]))
+        out.append(GdkPixbuf.Pixbuf.new_from_bytes(GLib.Bytes.new(bytes(rgba)), GdkPixbuf.Colorspace.RGB, True, 8, w, h, w * 4))
+    return out
+
+
+def png_bytes(w, h, argb):
+    import zlib, struct
+    raw = bytearray()
+    for y in range(h):
+        raw.append(0)
+        for x in range(w):
+            i = (y * w + x) * 4
+            raw += bytes((255, 255, 255, argb[i]))
+    def chunk(t, d):
+        c = struct.pack('>I', len(d)) + t + d
+        return c + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 6, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(bytes(raw), 9)) + chunk(b'IEND', b''))
+
+
+def install_icons(root='/usr/share/icons/hicolor'):
+    """Grava o icone 's9-panel' no tema (PNGs + SVG) para o .desktop / dock usarem o mesmo desenho da bandeja."""
+    sizes = (16, 22, 24, 32, 48, 64, 96)
+    for w, h, argb in make_pixmaps(sizes):
+        d = '%s/%dx%d/apps' % (root, w, h)
+        os.makedirs(d, exist_ok=True)
+        with open(d + '/s9-panel.png', 'wb') as f:
+            f.write(png_bytes(w, h, argb))
+        print('   gravado', d + '/s9-panel.png')
+    d = root + '/scalable/apps'
+    os.makedirs(d, exist_ok=True)
+    rects = ''.join('<rect x="%d" y="%d" width="36" height="36" rx="8" fill="#ffffff"/>' % p
+                    for p in ((9, 9), (55, 9), (9, 55), (55, 55)))
+    with open(d + '/s9-panel.svg', 'w') as f:
+        f.write('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">%s</svg>\n' % rects)
+    print('   gravado', d + '/s9-panel.svg')
+    if shutil.which('gtk-update-icon-cache'):
+        subprocess.call(['gtk-update-icon-cache', '-f', '-t', root], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print('   cache de icones atualizado')
+    return 0
+
+
+SNI_XML = '''<node><interface name="org.kde.StatusNotifierItem">
+<property name="Category" type="s" access="read"/><property name="Id" type="s" access="read"/>
+<property name="Title" type="s" access="read"/><property name="Status" type="s" access="read"/>
+<property name="IconName" type="s" access="read"/><property name="IconThemePath" type="s" access="read"/>
+<property name="IconPixmap" type="a(iiay)" access="read"/>
+<property name="ToolTip" type="(sa(iiay)ss)" access="read"/>
+<property name="ItemIsMenu" type="b" access="read"/><property name="Menu" type="o" access="read"/>
+<method name="Activate"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
+<method name="SecondaryActivate"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
+<method name="ContextMenu"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
+<method name="Scroll"><arg type="i" direction="in"/><arg type="s" direction="in"/></method>
+</interface></node>'''
+
+
+class Tray:
+    def __init__(self, on_click):
+        self.on_click, self.last, self.watch_id = on_click, 0.0, None
+        icon = read_conf().get('icon', '')
+        self.icon_name = icon
+        self.pix = [] if icon else make_pixmaps()
+        self.conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        node = Gio.DBusNodeInfo.new_for_xml(SNI_XML)
+        self.conn.register_object('/StatusNotifierItem', node.interfaces[0], self._call, self._get, None)
+        self.name = 'org.kde.StatusNotifierItem-%d-1' % os.getpid()
+        r = self.conn.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus', 'RequestName',
+                                GLib.Variant('(su)', (self.name, 0)), None, Gio.DBusCallFlags.NONE, -1, None)
+        log('tray: RequestName', r.unpack())
+        self.watch_id = Gio.bus_watch_name(Gio.BusType.SESSION, WATCHER, Gio.BusNameWatcherFlags.NONE,
+                                           self._appeared, self._vanished)
+
+    def _appeared(self, conn, name, owner):
+        GLib.timeout_add_seconds(1, self._register)
+
+    def _vanished(self, conn, name):
+        log('tray: watcher saiu; aguardando')
+
+    def _register(self):
+        try:
+            self.conn.call_sync(WATCHER, '/StatusNotifierWatcher', WATCHER, 'RegisterStatusNotifierItem',
+                                GLib.Variant('(s)', (self.name,)), None, Gio.DBusCallFlags.NONE, 5000, None)
+            log('tray: registrado como', self.name)
+        except Exception as e:
+            log('tray: registro falhou:', e)
+        return False
+
+    def _call(self, conn, sender, path, iface, method, params, inv):
+        inv.return_value(None)
+        now = time.monotonic()
+        if method in ('Activate', 'SecondaryActivate', 'ContextMenu') and now - self.last > 0.6:
+            self.last = now
+            ui(self.on_click)
+
+    def _get(self, conn, sender, path, iface, prop):
+        v = {
+            'Category': ('s', 'ApplicationStatus'), 'Id': ('s', 's9_panel'), 'Title': ('s', 'S9 Panel'),
+            'Status': ('s', 'Active'), 'IconName': ('s', self.icon_name), 'IconThemePath': ('s', ''),
+            'IconPixmap': ('a(iiay)', self.pix),
+            'ToolTip': ('(sa(iiay)ss)', ('', [], 'S9 Panel', 'Phone, SMS, screen cast, mobile data and fan')),
+            'ItemIsMenu': ('b', False), 'Menu': ('o', '/NO_DBUSMENU'),
+        }.get(prop)
+        return GLib.Variant(v[0], v[1]) if v else None
+
+
+# ============================================================ aplicacao
+class PanelApp(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        self.win, self.tray = None, None
+
+    def do_startup(self):
+        Gtk.Application.do_startup(self)
+        self.hold()
+
+    def do_command_line(self, cl):
+        args = cl.get_arguments()[1:]
+        first = self.win is None
+        if first:
+            self.win = PanelWindow(self)
+            if '--no-tray' not in args:
+                try:
+                    self.tray = Tray(lambda: self.win.toggle())
+                except Exception as e:
+                    log('tray: falhou:', e)
+        page = args[args.index('--page') + 1] if '--page' in args and args.index('--page') + 1 < len(args) else None
+        if '--background' in args and first and '--show' not in args:
+            return 0
+        if '--toggle' in args:
+            self.win.toggle(page)
+        else:
+            self.win.show_panel(page)
+        return 0
+
+
+def selftest():
+    """Sem tray: abre a janela na pagina do Phone, espera, e imprime o estado dos modelos e do encaixe."""
+    win = PanelWindow(None)
+    win.show_panel('phone-sms')
+    def report():
+        c, m, f = win.cast, win.mob, win.fan
+        print('modem   :', m.line1(), '|', m.line2())
+        print('cast    :', c.line1(), '| alvos DLNA/Cast=%d, Wi-Fi=%d' % (len(c.targets), len(c.wtargets)))
+        print('fan     :', f.summary())
+        pw = win.phone.sock.get_plug_window()
+        print('phone   : xid=%s embutido=%s plug_viewable=%s' % (
+            win.phone.xid, win.phone.embedded, (pw.is_viewable() if pw is not None else None)))
+        win.phone.stop()
+        GLib.timeout_add(500, Gtk.main_quit)
+        return False
+    GLib.timeout_add_seconds(7, report)
+    Gtk.main()
+    return 0
+
+
+def main():
+    if '--install-icons' in sys.argv:
+        i = sys.argv.index('--install-icons')
+        return install_icons(sys.argv[i + 1] if i + 1 < len(sys.argv) else '/usr/share/icons/hicolor')
+    if '--selftest' in sys.argv:
+        return selftest()
+    return PanelApp().run(sys.argv)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

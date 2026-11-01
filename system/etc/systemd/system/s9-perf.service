@@ -1,0 +1,6 @@
+[Unit]
+Description=S9: CPU e GPU em desempenho maximo (reaplica valores)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/s9-perf apply

@@ -1,0 +1,13 @@
+[Unit]
+Description=Fix GPU device permissions for starqltechn Ubuntu Touch
+After=local-fs.target systemd-udevd.service
+Before=lightdm.service
+
+[Service]
+Type=simple
+ExecStart=/opt/halium-overlay/usr/libexec/s9-gpu-permissions
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

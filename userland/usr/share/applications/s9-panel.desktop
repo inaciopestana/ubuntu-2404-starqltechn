@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=S9 Panel
+Comment=Phone, SMS, screen cast, mobile data and DexStation fan
+Exec=env GDK_BACKEND=x11 /usr/local/bin/s9-panel --toggle
+Icon=s9-panel
+Terminal=false
+Categories=X-S9-Telephony;

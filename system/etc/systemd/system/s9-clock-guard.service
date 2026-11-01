@@ -1,0 +1,13 @@
+[Unit]
+Description=Guard the system clock against bogus resets in early boot (Android time daemon)
+DefaultDependencies=no
+After=s9-clock-keep.service
+Wants=s9-clock-keep.service
+Before=sysinit.target
+Conflicts=shutdown.target
+[Service]
+Type=exec
+ExecStart=/usr/local/sbin/s9-clock-keep guard
+TimeoutStopSec=5
+[Install]
+WantedBy=sysinit.target

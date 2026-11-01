@@ -1,0 +1,15 @@
+[Unit]
+Description=S9 UBports PulseAudio Droid with isolated HIDL compatibility
+Wants=lxc-android-config.service
+After=lxc-android-config.service s9-miral-nested.service
+
+[Service]
+Type=exec
+ExecStart=/usr/local/sbin/s9-ubports-audio-launch
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

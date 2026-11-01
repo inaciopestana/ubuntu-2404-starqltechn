@@ -1,0 +1,12 @@
+[Unit]
+Description=Audio pelo DisplayPort (monitor) como saida do PulseAudio
+After=s9-ubports-audio-hidl.service
+
+[Service]
+ExecStart=/usr/local/sbin/s9-dp-audio
+ExecStopPost=/usr/local/sbin/s9-dp-audio --cleanup
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

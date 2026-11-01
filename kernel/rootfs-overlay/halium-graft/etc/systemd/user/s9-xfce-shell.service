@@ -1,0 +1,12 @@
+[Unit]
+Description=XFCE components on S9 Mir compositor
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/s9-desktop-session
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

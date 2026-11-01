@@ -1,0 +1,41 @@
+# Nested MirAL desktop compositor (the S9 window manager + Xwayland + XFCE session).
+#
+# This is the *flattened* form of what grew on the development phone as a stack of
+# ~40 drop-ins (one per experiment: v2..v8 graphics platform, v25..v40 shell, v51
+# Mir library). Only the settings that are in effect today are kept here.
+# The Bind mounts overlay patched binaries over the stock Ubuntu/UBports files
+# without touching the packages; they are installed under /opt/s9-ubports/ by the
+# image builder (see docs/installing.md).
+[Unit]
+Description=Galaxy S9 nested MirAL desktop compositor
+Requires=s9-lsc.service
+After=s9-lsc.service s9-xwayland-gralloc-mount.service
+Wants=s9-xwayland-gralloc-mount.service
+
+[Service]
+Type=simple
+ExecStartPre=-+/usr/local/sbin/s9-x0-clean
+# Give the desktop user access to the Wayland socket Mir is about to create, and verify it afterwards.
+ExecStartPre=/usr/local/sbin/s9-miral-wayland-acl prepare
+ExecStart=/usr/local/sbin/s9-miral-nested
+ExecStartPost=/usr/local/sbin/s9-miral-wayland-acl wait
+Restart=on-failure
+RestartSec=3
+
+RuntimeDirectory=s9-miral
+RuntimeDirectoryPreserve=no
+
+Environment=MIR_DECOR=1
+Environment=XCURSOR_THEME=Adwaita
+Environment=XCURSOR_SIZE=16
+Environment=LD_LIBRARY_PATH=/opt/s9-ubports/lib
+# uid of the desktop user (clipboard bridge); rendered by the installer
+Environment=S9_CLIP_UID=@S9_UID@
+
+# patched Mir pieces, overlaid read-only (the patched Mir libraries themselves are
+# found through LD_LIBRARY_PATH above)
+BindReadOnlyPaths=/opt/s9-ubports/platform/graphics-android2.so.16:/usr/lib/aarch64-linux-gnu/mir1/server-platform/graphics-android2.so.16
+BindReadOnlyPaths=/opt/s9-ubports/shell/s9-miral-shell:/usr/local/bin/s9-miral-shell
+
+[Install]
+WantedBy=graphical.target

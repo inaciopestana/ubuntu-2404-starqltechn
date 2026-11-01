@@ -1,0 +1,53 @@
+diff --git a/drivers/gpu/drm/msm/dp/dp_drm.c b/drivers/gpu/drm/msm/dp/dp_drm.c
+index 799f63e61d1d..dc0359370b81 100644
+--- a/drivers/gpu/drm/msm/dp/dp_drm.c
++++ b/drivers/gpu/drm/msm/dp/dp_drm.c
+@@ -453,6 +453,32 @@ int dp_connector_get_modes(struct drm_connector *connector,
+ 			m->width_mm = connector->display_info.width_mm;
+ 			m->height_mm = connector->display_info.height_mm;
+ 			drm_mode_probed_add(connector, m);
++#if defined(CONFIG_SEC_DISPLAYPORT) && defined(SECDP_WIDE_32_9_SUPPORT) /* S9-ULTRAWIDE-60 */
++			{
++				/* monitores 32:9 anunciam 3840x1080 so em alta taxa no EDID:
++				 * sintetiza 3840x1080@60 (CVT, blanking reduzido) para o modo de menor banda */
++				struct drm_display_mode *pm, *m60;
++				bool has_1080 = false, has_60 = false;
++			
++				list_for_each_entry(pm, &connector->probed_modes, head) {
++					if (pm->hdisplay == 3840 && pm->vdisplay == 1080) {
++						has_1080 = true;
++						if (drm_mode_vrefresh(pm) == 60)
++							has_60 = true;
++					}
++				}
++				if (has_1080 && !has_60) {
++					m60 = drm_cvt_mode(connector->dev, 3840, 1080, 60, true, false, false);
++					if (m60) {
++						m60->type = DRM_MODE_TYPE_DRIVER;
++						m60->width_mm = connector->display_info.width_mm;
++						m60->height_mm = connector->display_info.height_mm;
++						drm_mode_probed_add(connector, m60);
++						rc++;
++					}
++				}
++			}
++#endif
+ 		}
+ 	} else {
+ 		pr_err("No sink connected\n");
+diff --git a/drivers/gpu/drm/msm/dp/secdp.h b/drivers/gpu/drm/msm/dp/secdp.h
+index c2c81b94edd3..2d19a47e12c4 100644
+--- a/drivers/gpu/drm/msm/dp/secdp.h
++++ b/drivers/gpu/drm/msm/dp/secdp.h
+@@ -37,9 +37,9 @@
+ /*#define SECDP_CALIBRATE_VXPX*/			/* debug for calibrating voltage_level, pre-emphasis_level */
+ /*#define SECDP_OPTIMAL_LINK_RATE*/			/* use optimum link_rate, not max link_rate */
+ #define SECDP_WIDE_21_9_SUPPORT				/* support ultra-wide 21:9 resolution (2560x1080p, 3440x1440p) */
+-/*#define SECDP_WIDE_32_9_SUPPORT*/			/* support ultra-wide 32:9 resolution (3840x1080p) */
++#define SECDP_WIDE_32_9_SUPPORT			/* support ultra-wide 32:9 resolution (3840x1080p) */
+ /*#define SECDP_WIDE_32_10_SUPPORT*/		/* support ultra-wide 32:10 resolution (3840x1200p) */
+-/*#define SECDP_HIGH_REFRESH_SUPPORT*/		/* support more than 60hz refresh rate, such as 100/120/144hz */
++#define SECDP_HIGH_REFRESH_SUPPORT		/* support more than 60hz refresh rate, such as 100/120/144hz */
+ 
+ #define LEN_BRANCH_REVISION		3
+ #define DPCD_BRANCH_HW_REVISION			0x509

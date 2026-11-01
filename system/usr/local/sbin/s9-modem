@@ -1,0 +1,115 @@
+#!/bin/bash
+# s9-modem {up [backup|primary] | on | down | off | status}
+M=/ril_0; CTX=/ril_0/context1
+APN=${APN:-claro.com.br}; USR=${USR:-claro}; PW=${PW:-claro}
+STAB=${STAB:-6}; TRIES=${TRIES:-3}
+B(){ timeout 25 busctl --system call org.ofono "$@" 2>&1; }
+prop(){ B "$1" "$2" GetProperties | grep -oE "\"$3\" [a-z]+ (\"[^\"]*\"|[^ ]+)" | head -1 | sed -E 's/^"[^"]*" [a-z]+ //; s/^"//; s/"$//'; }
+isup(){ systemctl is-active -q ofono; }
+mainpid(){ systemctl show -P MainPID ofono; }
+waitfor(){ n=$1; shift; for _ in $(seq 1 "$n"); do "$@" && return 0; sleep 1; done; return 1; }
+has_modem(){ B / org.ofono.Manager GetModems | grep -q "\"$M\""; }
+is_reg(){ [ "$(prop $M org.ofono.NetworkRegistration Status)" = registered ]; }
+is_att(){ [ "$(prop $M org.ofono.ConnectionManager Attached)" = true ]; }
+is_act(){ [ "$(prop $CTX org.ofono.ConnectionContext Active)" = true ]; }
+ctxprops(){ B $CTX org.ofono.ConnectionContext GetProperties; }
+getif(){ ctxprops | grep -oE '"Interface" s "[^"]+"' | head -1 | cut -d'"' -f4; }
+stable(){ n=0; for _ in $(seq 1 90); do if is_reg && is_att; then n=$((n+1)); [ $n -ge "$1" ] && return 0; else n=0; fi; sleep 1; done; return 1; }
+
+status(){
+  if ! isup; then echo "state=off"; return 0; fi
+  echo "state=on"
+  echo "online=$(prop $M org.ofono.Modem Online)"
+  echo "sim=$(prop $M org.ofono.SimManager Present)"
+  echo "reg=$(prop $M org.ofono.NetworkRegistration Status)"
+  echo "operator=$(prop $M org.ofono.NetworkRegistration Name)"
+  echo "tech=$(prop $M org.ofono.NetworkRegistration Technology)"
+  # signal: removido (NetworkMonitor.GetServingCellInformation derruba o ofono)
+  echo "attached=$(prop $M org.ofono.ConnectionManager Attached)"
+  echo "data=$(prop $CTX org.ofono.ConnectionContext Active)"
+  if is_act; then
+    I=$(getif); echo "iface=$I"; echo "ip=$(ip -4 -br addr show "$I" 2>/dev/null | awk '{print $3}')"
+  fi
+}
+
+up_once(){
+  isup || systemctl start ofono
+  waitfor 60 has_modem || { ERR="modem nao apareceu"; return 1; }
+  PID0=$(mainpid)
+  B $M org.ofono.Modem SetProperty sv Powered b true >/dev/null
+  B $M org.ofono.Modem SetProperty sv Online b true >/dev/null
+  waitfor 60 is_reg || { ERR="sem registro na rede"; return 1; }
+  if ! ctxprops | grep -q "\"AccessPointName\" s \"$APN\""; then
+    B $CTX org.ofono.ConnectionContext SetProperty sv AccessPointName s "$APN" >/dev/null
+    B $CTX org.ofono.ConnectionContext SetProperty sv Username s "$USR" >/dev/null
+    B $CTX org.ofono.ConnectionContext SetProperty sv Password s "$PW" >/dev/null
+    B $CTX org.ofono.ConnectionContext SetProperty sv Protocol s ip >/dev/null
+    sleep 3
+  fi
+  stable "$STAB" || { ERR="rede de dados instavel"; return 1; }
+  is_act || B $CTX org.ofono.ConnectionContext SetProperty sv Active b true >/dev/null
+  waitfor 30 is_act || { ERR="contexto de dados nao ativou"; return 1; }
+  sleep 4
+  [ "$(mainpid)" = "$PID0" ] && is_act || { ERR="ofono reiniciou durante a ativacao"; return 1; }
+  P=$(ctxprops)
+  IF=$(echo "$P" | grep -oE '"Interface" s "[^"]+"' | head -1 | cut -d'"' -f4)
+  ADDR=$(echo "$P" | grep -oE '"Address" s "[^"]+"' | head -1 | cut -d'"' -f4)
+  MASK=$(echo "$P" | grep -oE '"Netmask" s "[^"]+"' | head -1 | cut -d'"' -f4)
+  DNS=$(echo "$P" | grep -oE '"DomainNameServers" as [0-9]+( "[^"]+")+' | grep -oE '"[0-9.]+"' | tr -d '"' | tr '\n' ' ')
+  { [ -n "$IF" ] && [ -n "$ADDR" ]; } || { ERR="sem interface/endereco"; return 1; }
+  if ! ip -4 -br addr show "$IF" | grep -q "$ADDR/"; then
+    PFX=$(python3 -c "import ipaddress,sys;print(ipaddress.IPv4Network('0.0.0.0/'+sys.argv[1]).prefixlen)" "${MASK:-255.255.255.255}")
+    ip addr add "$ADDR/$PFX" dev "$IF"
+  fi
+  ip link set "$IF" up
+  ip route replace default dev "$IF" metric "$MET"
+  if [ -n "$DNS" ] && systemctl is-active -q systemd-resolved; then resolvectl dns "$IF" $DNS; fi
+  return 0
+}
+
+up(){
+  case "${1:-backup}" in primary) MET=50;; backup) MET=900;; *) echo "modo invalido (backup|primary)"; exit 2;; esac
+  for try in $(seq 1 "$TRIES"); do
+    ERR=""
+    if up_once; then echo "ok: $IF $ADDR modo=${1:-backup} metrica=$MET dns=${DNS:-nenhum} tentativa=$try"; return 0; fi
+    echo "tentativa $try/$TRIES falhou: $ERR"; logger -t s9-modem "tentativa $try falhou: $ERR"
+    sleep 3
+  done
+  echo "ERRO: nao foi possivel ligar os dados ($ERR)"; exit 1
+}
+
+down(){
+  isup || { echo "ofono parado"; return 0; }
+  I=$(getif)
+  B $CTX org.ofono.ConnectionContext SetProperty sv Active b false >/dev/null
+  if [ -n "$I" ]; then
+    while ip route del default dev "$I" 2>/dev/null; do :; done
+    resolvectl revert "$I" 2>/dev/null
+  fi
+  echo "dados desligados"
+}
+
+off(){
+  down
+  isup && { B $M org.ofono.Modem SetProperty sv Online b false >/dev/null; sleep 1; systemctl stop ofono; }
+  echo "modem desligado (ofono parado)"
+}
+
+on(){
+  isup || systemctl start ofono
+  waitfor 60 has_modem || { echo "ERROR: modem did not appear"; exit 1; }
+  B $M org.ofono.Modem SetProperty sv Powered b true >/dev/null
+  B $M org.ofono.Modem SetProperty sv Online b true >/dev/null
+  waitfor 60 is_reg || { echo "ERROR: not registered on the network"; exit 1; }
+  echo "modem on and registered"
+}
+
+[ "$(id -u)" = 0 ] || { echo "precisa de root (use sudo)"; exit 1; }
+case "${1:-}" in
+  up) up "${2:-}";;
+  down) down;;
+  off) off;;
+  status) status;;
+  on) on;;
+  *) echo "uso: $0 {up [backup|primary] | on | down | off | status}"; exit 2;;
+esac

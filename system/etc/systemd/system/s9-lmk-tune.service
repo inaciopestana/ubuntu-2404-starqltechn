@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep the Android lowmemorykiller from killing the Wine tree
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/s9-lmk-tune
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

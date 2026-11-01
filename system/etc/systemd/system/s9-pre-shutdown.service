@@ -1,0 +1,13 @@
+[Unit]
+Description=Encerra chamadas e poe o modem offline antes do desligamento
+After=ofono.service s9-phoned.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/local/sbin/s9-pre-shutdown
+TimeoutStopSec=40
+
+[Install]
+WantedBy=multi-user.target

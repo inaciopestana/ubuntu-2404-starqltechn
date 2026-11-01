@@ -1,0 +1,14 @@
+[Unit]
+Description=LightDM daemon for Galaxy S9 Mir/Xwayland session
+After=dbus.service systemd-logind.service
+Wants=dbus.service
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.DisplayManager
+ExecStart=/usr/sbin/lightdm
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

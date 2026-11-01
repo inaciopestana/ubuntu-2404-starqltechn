@@ -1,0 +1,12 @@
+# Galaxy S9 SM-G9600 - armazenamento UFS Samsung.
+#
+# /dev/sda, sdb, sdc, sdd:
+# discos internos do aparelho.
+#
+# Ocultar somente as suas particoes na interface grafica.
+# Nao altera particoes montadas, permissoes nem dados.
+#
+# USB externo continua visivel, inclusive se usar sdX.
+# microSD mmcblk0 nao corresponde a estas regras.
+
+SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", KERNEL=="sd[a-d][0-9]*", ENV{ID_BUS}!="usb", ENV{UDISKS_IGNORE}="1"

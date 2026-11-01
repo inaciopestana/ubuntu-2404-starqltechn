@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+import fcntl, os, shutil, subprocess, sys, threading
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, Gdk, GLib
+try:
+    gi.require_version("AyatanaAppIndicator3", "0.1")
+    from gi.repository import AyatanaAppIndicator3 as AI
+except Exception:
+    AI = None
+
+CMD = ["sudo", "-n", "/usr/local/sbin/s9-modem"]
+POLL = 15
+
+lock = open("/tmp/s9-modem-tray.%d.lock" % os.getuid(), "w")
+try:
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    sys.exit(0)
+
+def sh(*args, timeout=300):
+    try:
+        r = subprocess.run(CMD + list(args), capture_output=True, text=True, timeout=timeout)
+        return r.returncode, (r.stdout + r.stderr).strip()
+    except Exception as e:
+        return 1, str(e)
+
+def parse(out):
+    d = {}
+    for line in out.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            d[k.strip()] = v.strip()
+    return d
+
+def notify(msg):
+    if shutil.which("notify-send"):
+        subprocess.Popen(["notify-send", "-i", "network-cellular-signal-good-symbolic", "Modem", msg])
+
+class Tray:
+    def __init__(self):
+        self.st = {}
+        self.busy = None
+        self.theme = Gtk.IconTheme.get_default()
+        self.menu = self.build_menu()
+        self.ind = None
+        self.icon = None
+        if AI is not None:
+            # o painel (wrapper-2.0) desenha o menu e o tooltip: posicao tratada pelos patches do Mir
+            self.ind = AI.Indicator.new("s9-modem-tray", "phone", AI.IndicatorCategory.HARDWARE)
+            self.ind.set_status(AI.IndicatorStatus.ACTIVE)
+            self.ind.set_title("Modem (chip)")
+            self.ind.set_menu(self.menu)
+        else:
+            self.icon = Gtk.StatusIcon()
+            self.icon.connect("activate", lambda i: self.popup(1, Gtk.get_current_event_time()))
+            self.icon.connect("popup-menu", lambda i, b, t: self.popup(b, t))
+        self.update_ui()
+        self.refresh()
+        GLib.timeout_add_seconds(POLL, self.refresh)
+
+    # ---- menu (itens fixos; so mudam rotulo/visibilidade) ----
+    def mk(self, m, label, cb=None):
+        it = Gtk.MenuItem(label=label)
+        if cb:
+            it.connect("activate", lambda w: cb())
+        m.append(it)
+        return it
+
+    def build_menu(self):
+        m = Gtk.Menu()
+        self.i_l1 = self.mk(m, "Modem"); self.i_l1.set_sensitive(False)
+        self.i_l2 = self.mk(m, ""); self.i_l2.set_sensitive(False)
+        self.sep1 = Gtk.SeparatorMenuItem(); m.append(self.sep1)
+        self.i_busy = self.mk(m, ""); self.i_busy.set_sensitive(False)
+        self.i_down = self.mk(m, "Desligar dados", lambda: self.act("Desligando dados", "down"))
+        self.i_prim = self.mk(m, "Usar chip como principal", lambda: self.act("Dados como principal", "up", "primary"))
+        self.i_back = self.mk(m, "Usar chip como reserva do Wi-Fi", lambda: self.act("Dados como reserva", "up", "backup"))
+        self.i_onb = self.mk(m, "Ligar dados (reserva do Wi-Fi)", lambda: self.act("Ligando dados", "up", "backup"))
+        self.i_onp = self.mk(m, "Ligar dados (principal)", lambda: self.act("Ligando dados", "up", "primary"))
+        self.sep2 = Gtk.SeparatorMenuItem(); m.append(self.sep2)
+        self.i_off = self.mk(m, "Desligar modem (parar ofono)", lambda: self.act("Desligando modem", "off"))
+        self.sep3 = Gtk.SeparatorMenuItem(); m.append(self.sep3)
+        self.i_ref = self.mk(m, "Atualizar", self.refresh)
+        self.i_quit = self.mk(m, "Sair", Gtk.main_quit)
+        for it in m.get_children():
+            it.show()
+        return m
+
+    def update_ui(self):
+        st = self.st
+        on = st.get("state") == "on"
+        data = st.get("data") == "true"
+        busy = bool(self.busy)
+        self.i_l1.set_label(self.line1())
+        self.i_l2.set_label(self.line2())
+        self.i_busy.set_label((self.busy or "") + "...")
+        self.i_busy.set_visible(busy)
+        for it in (self.i_down, self.i_prim, self.i_back):
+            it.set_visible(data and not busy)
+        for it in (self.i_onb, self.i_onp):
+            it.set_visible((not data) and not busy)
+        self.i_off.set_visible(on and not busy)
+
+    def popup(self, button, t):
+        self.menu.popup(None, None, self.place, None, button, t)
+
+    def place(self, menu, *args):
+        try:
+            disp = Gdk.Display.get_default()
+            _s, px, py = disp.get_default_seat().get_pointer().get_position()
+            mon = disp.get_monitor_at_point(px, py)
+            g = mon.get_geometry()
+            mw = menu.get_preferred_width()[1]
+            mh = menu.get_preferred_height()[1]
+            x = max(g.x, min(px, g.x + g.width - mw))
+            y = py - 20 - mh if py > g.y + g.height // 2 else py + 20
+            y = max(g.y, min(y, g.y + g.height - mh))
+            return int(x), int(y), True
+        except Exception:
+            return 0, 0, True
+
+    # ---- icone / texto ----
+    def set_icon(self, names):
+        name = "phone"
+        for n in names:
+            if self.theme.has_icon(n):
+                name = n
+                break
+        if self.ind is not None:
+            self.ind.set_icon_full(name, "Modem")
+        else:
+            self.icon.set_from_icon_name(name)
+
+    def set_tip(self, text):
+        if self.ind is not None:
+            self.ind.set_title(text.replace("\n", " · "))
+        else:
+            self.icon.set_tooltip_text(text)
+
+    def level(self):
+        try:
+            s = int(self.st.get("signal", ""))
+        except ValueError:
+            return "none"
+        if s >= 75: return "excellent"
+        if s >= 55: return "good"
+        if s >= 35: return "ok"
+        if s >= 10: return "weak"
+        return "none"
+
+    def line1(self):
+        st = self.st
+        if "error" in st:
+            return "Erro ao consultar o modem"
+        if st.get("state") != "on":
+            return "Modem desligado (ofono parado)"
+        if st.get("reg") != "registered":
+            return "Sem registro na rede (%s)" % (st.get("reg") or "?")
+        sig = st.get("signal")
+        return "%s · %s%s" % (st.get("operator", "?"), st.get("tech", "?").upper(), (" · sinal %s%%" % sig) if sig else "")
+
+    def line2(self):
+        st = self.st
+        if "error" in st:
+            return st["error"]
+        if st.get("state") != "on":
+            return "Dados: desligados"
+        if st.get("data") == "true":
+            return "Dados: ligados (%s %s)" % (st.get("iface", ""), st.get("ip", ""))
+        return "Dados: desligados"
+
+    # ---- estado ----
+    def refresh(self):
+        if not self.busy:
+            threading.Thread(target=self._poll, daemon=True).start()
+        return True
+
+    def _poll(self):
+        rc, out = sh("status", timeout=30)
+        GLib.idle_add(self.apply, rc, out)
+
+    def apply(self, rc, out):
+        if rc != 0:
+            self.st = {"error": out[:120]}
+            self.set_icon(["dialog-error-symbolic", "dialog-error"])
+        else:
+            self.st = parse(out)
+            st = self.st
+            if st.get("state") != "on":
+                self.set_icon(["network-cellular-offline-symbolic"])
+            elif st.get("data") == "true":
+                self.set_icon(["network-cellular-signal-%s-symbolic" % self.level(), "network-cellular-connected-symbolic"])
+            elif st.get("reg") == "registered":
+                self.set_icon(["network-cellular-no-route-symbolic", "network-cellular-connected-symbolic"])
+            else:
+                self.set_icon(["network-cellular-acquiring-symbolic", "network-cellular-offline-symbolic"])
+        self.set_tip(self.line1() + "\n" + self.line2())
+        self.update_ui()
+        return False
+
+    def act(self, label, *args):
+        if self.busy:
+            return
+        self.busy = label
+        self.set_icon(["network-cellular-acquiring-symbolic"])
+        self.set_tip(label + "...")
+        self.update_ui()
+        def work():
+            rc, out = sh(*args)
+            GLib.idle_add(self.done, label, rc, out)
+        threading.Thread(target=work, daemon=True).start()
+
+    def done(self, label, rc, out):
+        self.busy = None
+        last = out.splitlines()[-1] if out else ""
+        notify(("%s: ok" % label) if rc == 0 else ("%s: ERRO - %s" % (label, last)))
+        self.update_ui()
+        self.refresh()
+        return False
+
+Tray()
+Gtk.main()

@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+
+set -u
+
+USER_NAME=@S9_USER@
+HOME_DIR=@S9_HOME@
+UID_NUM=@S9_UID@
+
+log()
+{
+    echo "s9-nm-applet: $*"
+}
+
+while :; do
+
+    #
+    # Se alguma sessao/autostart ja iniciou nm-applet,
+    # nao cria uma segunda instancia.
+    #
+    if pgrep \
+        -u "$USER_NAME" \
+        -x nm-applet \
+        >/dev/null 2>&1
+    then
+
+        log "nm-applet ja esta rodando; aguardando"
+
+        while pgrep \
+            -u "$USER_NAME" \
+            -x nm-applet \
+            >/dev/null 2>&1
+        do
+            sleep 2
+        done
+
+        log "nm-applet existente terminou"
+    fi
+
+
+    #
+    # A sessao grafica do S9 pode mudar de :0 para :1 etc.
+    # xfsettingsd e um bom processo para obter o ambiente
+    # REAL da sessao XFCE atual.
+    #
+    PID="$(
+        pgrep \
+            -u "$USER_NAME" \
+            -x xfsettingsd |
+        tail -1
+    )"
+
+    if [ -z "${PID:-}" ] ||
+       [ ! -r "/proc/$PID/environ" ]
+    then
+        log "aguardando sessao XFCE..."
+        sleep 1
+        continue
+    fi
+
+
+    ENV="$(
+        tr '\0' '\n' \
+            < "/proc/$PID/environ"
+    )"
+
+
+    DISPLAY_REAL="$(
+        printf '%s\n' "$ENV" |
+        sed -n 's/^DISPLAY=//p' |
+        head -1
+    )"
+
+    DBUS_REAL="$(
+        printf '%s\n' "$ENV" |
+        sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p' |
+        head -1
+    )"
+
+    XAUTH_REAL="$(
+        printf '%s\n' "$ENV" |
+        sed -n 's/^XAUTHORITY=//p' |
+        head -1
+    )"
+
+    XDG_REAL="$(
+        printf '%s\n' "$ENV" |
+        sed -n 's/^XDG_RUNTIME_DIR=//p' |
+        head -1
+    )"
+
+
+    [ -n "$DISPLAY_REAL" ] || {
+        log "xfsettingsd sem DISPLAY; aguardando..."
+        sleep 1
+        continue
+    }
+
+    [ -n "$DBUS_REAL" ] || {
+        log "xfsettingsd sem DBUS_SESSION_BUS_ADDRESS; aguardando..."
+        sleep 1
+        continue
+    }
+
+    [ -n "$XAUTH_REAL" ] ||
+        XAUTH_REAL="$HOME_DIR/.Xauthority"
+
+    [ -n "$XDG_REAL" ] ||
+        XDG_REAL="/run/user/$UID_NUM"
+
+
+    log "iniciando nm-applet"
+    log "DISPLAY=$DISPLAY_REAL"
+    log "XDG_RUNTIME_DIR=$XDG_REAL"
+
+
+    exec /usr/sbin/runuser \
+        -u "$USER_NAME" \
+        -- \
+        env \
+        HOME="$HOME_DIR" \
+        USER="$USER_NAME" \
+        LOGNAME="$USER_NAME" \
+        DISPLAY="$DISPLAY_REAL" \
+        XAUTHORITY="$XAUTH_REAL" \
+        DBUS_SESSION_BUS_ADDRESS="$DBUS_REAL" \
+        XDG_RUNTIME_DIR="$XDG_REAL" \
+        \
+        /usr/bin/nm-applet
+
+done

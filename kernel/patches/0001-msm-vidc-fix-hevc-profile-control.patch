@@ -1,0 +1,31 @@
+From: Ubuntu Touch star2qltechn port
+Subject: [PATCH] media: msm: vidc: fix HEVC profile menu bounds
+
+The V4L2 HEVC profile enum starts with MAIN at index 0, followed by
+MAIN10 at index 1.  The encoder control incorrectly used MAIN10 as its
+minimum while keeping MAIN as the default.  v4l2_ctrl_new_custom()
+rejects that control and the whole encoder instance fails to open.
+
+Keep the menu strings in enum order and allow MAIN as the minimum.
+
+--- a/drivers/media/platform/msm/vidc/msm_venc.c
++++ b/drivers/media/platform/msm/vidc/msm_venc.c
+@@ -127,8 +127,8 @@ static const char *const tme_level[] = {
+ };
+ 
+ static const char *const hevc_profile[] = {
+-	"Main10",
+ 	"Main",
++	"Main10",
+ 	"Main Still Pic",
+ };
+ 
+@@ -485,7 +485,7 @@ static struct v4l2_ctrl_config msm_venc_ctrls[] = {
+ 		.id = V4L2_CID_MPEG_VIDC_VIDEO_HEVC_PROFILE,
+ 		.name = "HEVC Profile",
+ 		.type = V4L2_CTRL_TYPE_MENU,
+-		.minimum = V4L2_MPEG_VIDC_VIDEO_HEVC_PROFILE_MAIN10,
++		.minimum = V4L2_MPEG_VIDC_VIDEO_HEVC_PROFILE_MAIN,
+ 		.maximum = V4L2_MPEG_VIDC_VIDEO_HEVC_PROFILE_MAIN_STILL_PIC,
+ 		.default_value = V4L2_MPEG_VIDC_VIDEO_HEVC_PROFILE_MAIN,
+ 		.menu_skip_mask =  ~(

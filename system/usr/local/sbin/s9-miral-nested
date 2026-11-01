@@ -1,0 +1,78 @@
+#!/bin/sh
+
+LOG=/var/log/s9-miral-nested.log
+
+exec >>"$LOG" 2>&1
+
+echo
+echo "============================================================"
+echo "S9 NESTED MIRAL START"
+date
+echo "pid=$$"
+echo "============================================================"
+
+# Same Android/Hybris environment as the physical (system) compositor
+if [ -r /etc/environment ]; then
+    . /etc/environment
+fi
+
+for f in /etc/default/lsc-wrapper.d/*; do
+    [ -r "$f" ] && . "$f"
+done
+
+export ANDROID_ROOT="${ANDROID_ROOT:-/android/system}"
+export ANDROID_DATA="${ANDROID_DATA:-/android/data}"
+
+export MIR_SERVER_HOST_SOCKET=/run/mir_socket
+export LD_PRELOAD=libtls-padding.so
+
+export HOME=/root
+export XDG_RUNTIME_DIR=/run/s9-miral
+export WAYLAND_DISPLAY=wayland-0
+
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 0700 "$XDG_RUNTIME_DIR"
+
+echo "===== ESPERANDO LSC FISICO ====="
+
+i=0
+while [ ! -S /run/mir_socket ]; do
+    i=$((i + 1))
+
+    if [ "$i" -gt 60 ]; then
+        echo "ERRO: /run/mir_socket nao apareceu"
+        exit 20
+    fi
+
+    sleep 1
+done
+
+echo "===== HOST SOCKET ====="
+ls -l /run/mir_socket
+
+echo
+echo "===== MIR1 PLUGINS ====="
+find /usr/lib/aarch64-linux-gnu/mir1 \
+    -maxdepth 3 \
+    \( -type f -o -type l \) \
+    -print
+
+echo
+echo "===== INICIANDO MIRAL ANINHADO ====="
+
+exec /usr/local/bin/s9-miral-shell \
+    --platform-path=/opt/s9-ubports/platform \
+    --host-socket=/run/mir_socket \
+    --file=/run/s9-miral/mir_socket \
+    --arw-file \
+    --enable-mirclient \
+    --enable-input=1 \
+    --cursor=software \
+    --cursor-theme=Adwaita \
+    --display-config=static=/etc/s9-miral.display \
+    --name=s9-xfce-nested \
+    --window-manager=s9 \
+    --nested-passthrough=0 \
+    --enable-x11 \
+    --xwayland-path=/usr/bin/Xwayland \
+    --startup-apps=/usr/local/sbin/s9-xfce-direct-session

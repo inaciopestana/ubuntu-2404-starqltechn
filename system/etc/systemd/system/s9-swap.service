@@ -1,0 +1,13 @@
+[Unit]
+Description=S9 swapfile (no zram in this kernel)
+ConditionPathExists=/swapfile
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=60
+ExecStart=/usr/sbin/swapon -p 10 /swapfile
+ExecStop=/usr/sbin/swapoff /swapfile
+
+[Install]
+WantedBy=multi-user.target

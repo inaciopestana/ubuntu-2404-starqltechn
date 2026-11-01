@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+LOG=/var/log/s9-mir.log
+exec >>"$LOG" 2>&1
+set -a; [[ -r /etc/s9-halium/mir.env ]] && source /etc/s9-halium/mir.env; set +a
+id
+ls -l /dev/ion /dev/kgsl-3d0 2>/dev/null || true
+# Mir 1 / Halium path first; Miriway is only tried when actually installed.
+if command -v miral-shell >/dev/null 2>&1; then
+  echo "Launching miral-shell (Mir 1/Halium-compatible path)"
+  exec miral-shell --enable-x11
+elif command -v miriway >/dev/null 2>&1; then
+  echo "Launching miriway (experimental on this Halium stack)"
+  exec miriway
+else
+  echo "No Mir shell found" >&2
+  exit 127
+fi

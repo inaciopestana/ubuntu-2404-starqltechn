@@ -1,0 +1,14 @@
+[Unit]
+Description=S9 screen cast to a TV (Google Cast / DLNA)
+After=s9-miral-nested.service
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /usr/local/lib/s9-cast/s9-cast-tv.py run
+ExecStopPost=-/usr/local/sbin/s9-cast-audio restore
+Restart=no
+Nice=5
+CPUAccounting=yes
+KillMode=control-group
+TimeoutStopSec=15

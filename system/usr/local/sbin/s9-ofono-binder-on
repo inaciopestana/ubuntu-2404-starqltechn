@@ -1,0 +1,20 @@
+#!/bin/bash
+set -euo pipefail
+[ "$(id -u)" = 0 ] || { echo "precisa de root"; exit 1; }
+[ "${1:-}" = "--yes" ] || { echo "uso: $0 --yes"; exit 2; }
+install -d /etc/systemd/system/ofono.service.d
+cat >/etc/systemd/system/ofono.service.d/s9-binder.conf <<'C'
+# S9: o ofonod-wrapper escolhe o plugin via 'device-info' (inexistente neste rootfs) e acaba
+# desligando o plugin 'binder'. Aqui o ofonod sobe direto com binder ligado e ril desligado.
+[Service]
+Environment=OFONO_SYSTEM_APNDB_PATH=/usr/share/lineageos-apndb/apns-conf.xml
+ExecStart=
+ExecStart=/usr/sbin/ofonod -P stktest,sap,udev,dun,smart,hfp,hfp_bluez5,provision,ril --nodetach
+C
+systemctl daemon-reload
+systemctl restart ofono
+sleep 10
+echo "ofono: $(systemctl is-active ofono)"
+echo "apndb do Lineage: $(ls /usr/share/lineageos-apndb/apns-conf.xml 2>&1 | head -1)"
+journalctl -u ofono -b --no-pager -o short-monotonic --since "-30s" | sed -E 's/[0-9]{8,}/<num>/g' | cut -c1-210 | tail -40
+echo "modems conhecidos: $(timeout 20 busctl --system call org.ofono / org.ofono.Manager GetModems 2>&1 | head -1)"

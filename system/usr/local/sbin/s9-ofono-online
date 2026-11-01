@@ -1,0 +1,19 @@
+#!/usr/bin/python3
+# s9-ofono-online true|false [limite_s]: liga/desliga o modo Online dos modems no ofono (sem systemctl)
+import sys, time, dbus
+want = sys.argv[1] == 'true'; limit = float(sys.argv[2]) if len(sys.argv) > 2 else 15
+bus = dbus.SystemBus()
+mgr = dbus.Interface(bus.get_object('org.ofono', '/'), 'org.ofono.Manager')
+mods = [str(p) for p, _ in mgr.GetModems()]
+if not mods:
+    print('sem modem'); sys.exit(0)
+end = time.time() + limit
+for p in mods:
+    m = dbus.Interface(bus.get_object('org.ofono', p), 'org.ofono.Modem')
+    try:
+        m.SetProperty('Online', dbus.Boolean(want), timeout=limit)
+    except dbus.DBusException as e:
+        print(p, 'ignorado:', e.get_dbus_name()); continue
+    while time.time() < end and bool(m.GetProperties().get('Online', False)) != want:
+        time.sleep(0.3)
+    print(p, 'Online =', bool(m.GetProperties().get('Online', False)))

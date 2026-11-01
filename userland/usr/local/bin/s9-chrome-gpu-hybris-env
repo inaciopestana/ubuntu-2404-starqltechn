@@ -1,0 +1,34 @@
+#!/bin/bash
+
+export XDG_RUNTIME_DIR=/run/user/1000
+export WAYLAND_DISPLAY=/run/s9-miral/wayland-0
+
+export EGL_PLATFORM=wayland
+export HYBRIS_EGLPLATFORM=wayland
+export HYBRIS_USE_VENDOR_NAMESPACE=1
+
+export ANDROID_ROOT=/android/system
+export ANDROID_DATA=/android/data
+
+export HYBRIS_LD_LIBRARY_PATH=/vendor/lib64/egl:/android/vendor/lib64/egl:/vendor/lib64:/android/vendor/lib64:/odm/lib64:/android/odm/lib64:/system/lib64:/android/system/lib64
+
+export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_libhybris.json
+
+unset VK_DRIVER_FILES
+unset VK_ICD_FILENAMES
+unset MESA_LOADER_DRIVER_OVERRIDE
+unset MESA_VK_WSI_DEBUG
+unset LIBGL_KOPPER_DRI2
+unset LIBGL_ALWAYS_SOFTWARE
+
+{
+    echo "===== $(date --iso-8601=seconds) ====="
+    echo "PID=$$"
+    echo "ARGS=$*"
+    echo "WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
+    echo "EGL_PLATFORM=$EGL_PLATFORM"
+    echo "HYBRIS_EGLPLATFORM=$HYBRIS_EGLPLATFORM"
+    echo "__EGL_VENDOR_LIBRARY_FILENAMES=$__EGL_VENDOR_LIBRARY_FILENAMES"
+} >> /tmp/s9-chrome-gpu-wrapper.log
+
+exec "$@"

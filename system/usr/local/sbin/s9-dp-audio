@@ -1,0 +1,53 @@
+#!/bin/bash
+# S9: audio pelo DisplayPort. ALSA hw:0,1 (MultiMedia2) -> backend DISPLAY_PORT, exposto como sink "s9_dp" no Pulse.
+# Liga quando o extcon "msm-ext-disp" reporta DP=1 e desliga quando deixa de reportar.
+U=@S9_USER@
+STATE=/var/lib/s9-dp-audio; mkdir -p $STATE
+log(){ echo "s9-dp-audio: $*"; }
+PA(){ runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/1000 pactl "$@"; }
+mixer_on(){
+  amixer -c0 -q cset name='DISPLAY_PORT Mixer MultiMedia2' 1
+  amixer -c0 -q cset name='Display Port RX Channels' 0
+  amixer -c0 -q cset name='Display Port RX SampleRate' 0
+  amixer -c0 -q cset name='Display Port RX Bit Format' 0
+}
+mixer_off(){ amixer -c0 -q cset name='DISPLAY_PORT Mixer MultiMedia2' 0; }
+ext(){ local d; for d in /sys/class/extcon/*; do [ "$(cat $d/name 2>/dev/null)" = "soc:qcom,msm-ext-disp" ] && { echo $d; return; }; done; }
+pulse_up(){ PA info >/dev/null 2>&1; }
+have_sink(){ PA list short sinks 2>/dev/null | awk '{print $2}' | grep -qx s9_dp; }
+move_all(){ local id; for id in $(PA list short sink-inputs 2>/dev/null | awk '{print $1}'); do PA move-sink-input $id "$1" >/dev/null 2>&1; done; }
+setup(){
+  log "DP conectado: ativando o audio do monitor"
+  local prev m; prev=$(PA get-default-sink 2>/dev/null)
+  [ -n "$prev" ] && [ "$prev" != s9_dp ] && echo "$prev" > $STATE/prev-default
+  mixer_on
+  m=$(PA load-module module-alsa-sink device=hw:0,1 sink_name=s9_dp sink_properties=device.description=Monitor_DisplayPort rate=48000 channels=2 format=s16le tsched=0 2>&1) || { log "falha ao criar o sink: $m"; mixer_off; return 1; }
+  [ -e $STATE/vol-init ] || { PA set-sink-volume s9_dp 50%; touch $STATE/vol-init; }
+  PA set-default-sink s9_dp
+  move_all s9_dp
+  log "saida s9_dp ativa (modulo $m); anterior: ${prev:-?}"
+}
+teardown(){
+  log "DP desconectado: voltando para a saida anterior"
+  local back mod; back=$(cat $STATE/prev-default 2>/dev/null); back=${back:-sink.fast}
+  PA set-default-sink "$back" 2>/dev/null
+  move_all "$back"
+  mod=$(PA list short modules 2>/dev/null | awk '/module-alsa-sink/ && /s9_dp/ {print $1}')
+  [ -n "$mod" ] && PA unload-module $mod
+  mixer_off
+  log "saida s9_dp removida; padrao: $back"
+}
+if [ "${1:-}" = "--cleanup" ]; then pulse_up && have_sink && teardown; mixer_off; exit 0; fi
+EXT=""; prev=""; n=0
+while :; do
+  [ -n "$EXT" ] || EXT=$(ext)
+  st=""; [ -n "$EXT" ] && st=$(<$EXT/state) 2>/dev/null
+  case "$st" in *DP=1*) now=1;; *) now=0;; esac
+  if [ "$now" != "$prev" ] || [ $((n % 10)) = 0 ]; then
+    if pulse_up; then
+      if [ $now = 1 ]; then have_sink || setup; else have_sink && teardown; fi
+      prev=$now
+    fi
+  fi
+  n=$((n+1)); sleep 3
+done

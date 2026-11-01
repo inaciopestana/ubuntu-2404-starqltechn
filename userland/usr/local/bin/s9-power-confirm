@@ -1,0 +1,56 @@
+#!/usr/bin/python3
+
+import sys
+import subprocess
+
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
+
+if len(sys.argv) != 2:
+    sys.exit(2)
+
+action = sys.argv[1]
+
+if action == "poweroff":
+    label = "Power Off"
+    question = "Power off the Galaxy S9?"
+elif action == "reboot":
+    label = "Reboot"
+    question = "Restart the Galaxy S9?"
+else:
+    sys.exit(2)
+
+dialog = Gtk.MessageDialog(
+    transient_for=None,
+    flags=Gtk.DialogFlags.MODAL,
+    message_type=Gtk.MessageType.QUESTION,
+    buttons=Gtk.ButtonsType.NONE,
+    text=question
+)
+
+dialog.set_title(label)
+dialog.set_position(Gtk.WindowPosition.CENTER)
+
+dialog.format_secondary_text(
+    "Ubuntu will stop all services cleanly first."
+)
+
+dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+dialog.add_button(label, Gtk.ResponseType.OK)
+
+answer = dialog.run()
+dialog.destroy()
+
+if answer == Gtk.ResponseType.OK:
+    subprocess.Popen(
+        [
+            "/usr/bin/pkexec",
+            "/usr/local/sbin/s9-orderly-power",
+            action
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True
+    )

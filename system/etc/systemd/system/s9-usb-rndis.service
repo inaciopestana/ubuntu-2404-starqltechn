@@ -1,0 +1,14 @@
+[Unit]
+Description=Galaxy S9 USB debug network
+After=local-fs.target systemd-modules-load.service lxc-android-config.service
+Wants=lxc-android-config.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 12
+ExecStart=/usr/local/sbin/s9-usb-rndis start
+ExecStop=/usr/local/sbin/s9-usb-rndis stop
+
+[Install]
+WantedBy=multi-user.target

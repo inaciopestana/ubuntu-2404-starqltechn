@@ -1,0 +1,2 @@
+# Bandeja da ventoinha da DeX Station: comandos fixos, sem senha
+@S9_USER@ ALL=(root) NOPASSWD: /usr/local/sbin/s9-dex-fan auto, /usr/local/sbin/s9-dex-fan high, /usr/local/sbin/s9-dex-fan medium, /usr/local/sbin/s9-dex-fan low, /usr/local/sbin/s9-dex-fan off, /usr/local/sbin/s9-dex-fan enable

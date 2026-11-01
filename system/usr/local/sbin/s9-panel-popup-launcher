@@ -1,0 +1,32 @@
+#!/bin/sh
+
+while :; do
+    PID="$(pgrep -u @S9_USER@ -x xfce4-panel | head -n1)"
+
+    if [ -n "$PID" ] && [ -r "/proc/$PID/environ" ]; then
+
+        DISP="$(
+            tr '\0' '\n' < "/proc/$PID/environ" |
+            sed -n 's/^DISPLAY=//p' | head -n1
+        )"
+
+        AUTH="$(
+            tr '\0' '\n' < "/proc/$PID/environ" |
+            sed -n 's/^XAUTHORITY=//p' | head -n1
+        )"
+
+        [ -n "$AUTH" ] || \
+            AUTH=@S9_HOME@/.Xauthority
+
+        if [ -n "$DISP" ]; then
+            exec runuser -u @S9_USER@ -- \
+                env DISPLAY="$DISP" \
+                XAUTHORITY="$AUTH" \
+                S9_PANEL_PID="$PID" \
+                /usr/bin/python3 -u \
+                /usr/local/bin/s9-panel-popup-anchor.py
+        fi
+    fi
+
+    sleep 2
+done

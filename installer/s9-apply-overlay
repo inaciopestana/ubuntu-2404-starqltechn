@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# s9-apply-overlay - install the S9 system/ and userland/ trees into a root file
+# system and render the @S9_*@ placeholders from a configuration file.
+#
+# Used in two ways:
+#   * by the image builder, against a mounted/chrooted rootfs:  --root /mnt/rootfs
+#   * by s9-firstboot on the running phone:                     (default root: /)
+#
+#   s9-apply-overlay [--root DIR] [--conf FILE] [--repo DIR] [--no-account] [--no-enable]
+#
+# The configuration file is the one described in docs/configuration.md. Required key:
+# S9_USER. Everything else has a default. The password is NOT read from the file: set
+# it with S9_PASSWORD_HASH (a crypt(3) hash) or let s9-firstboot ask for it.
+set -euo pipefail
+
+ROOT=/ CONF= REPO=$(cd "$(dirname "$0")/.." && pwd) ACCOUNT=1 ENABLE=1
+while [ $# -gt 0 ]; do
+  case $1 in
+    --root) ROOT=$2; shift 2;;
+    --conf) CONF=$2; shift 2;;
+    --repo) REPO=$2; shift 2;;
+    --no-account) ACCOUNT=0; shift;;
+    --no-enable) ENABLE=0; shift;;
+    -h|--help) sed -n '2,13p' "$0"; exit 0;;
+    *) echo "unknown option: $1" >&2; exit 2;;
+  esac
+done
+ROOT=${ROOT%/}; [ -n "$ROOT" ] || ROOT=/
+CONF=${CONF:-$ROOT/etc/s9-ubports.conf}
+[ "$(id -u)" -eq 0 ] || [ "$ROOT" != / ] || { echo "run as root" >&2; exit 1; }
+[ -r "$CONF" ] || { echo "configuration file not found: $CONF" >&2; exit 1; }
+
+# --- read the configuration (KEY=VALUE only; never sourced as shell) -----------------
+declare -A C=( [S9_UID]=1000 [S9_KEYMAP]=us [S9_LOCALE]=en_US.UTF-8 [S9_TZ]=UTC [S9_HOSTNAME]=s9 )
+while IFS= read -r line; do
+  line=${line%%#*}
+  [[ $line =~ ^[[:space:]]*(S9_[A-Z_]+)=[[:space:]]*\"?([^\"[:space:]]*)\"?[[:space:]]*$ ]] && C[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}
+done < "$CONF"
+U=${C[S9_USER]:-}
+[[ $U =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo "S9_USER missing or not a valid account name" >&2; exit 1; }
+[ "$U" != root ] || { echo "S9_USER must not be root" >&2; exit 1; }
+C[S9_HOME]=${C[S9_HOME]:-/home/$U}
+[[ ${C[S9_UID]} =~ ^[0-9]+$ ]] || { echo "S9_UID must be a number" >&2; exit 1; }
+[[ ${C[S9_HOME]} =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo "S9_HOME has odd characters" >&2; exit 1; }
+
+# --- copy trees, rendering templates ------------------------------------------------
+render() {  # $1=file
+  sed -i -e "s#@S9_USER@#${C[S9_USER]}#g" -e "s#@S9_UID@#${C[S9_UID]}#g" \
+         -e "s#@S9_HOME@#${C[S9_HOME]}#g" "$1"
+}
+for t in system userland; do
+  [ -d "$REPO/$t" ] || { echo "missing $REPO/$t" >&2; exit 1; }
+  ( cd "$REPO/$t" && find . -type f ! -name TEMPLATES.txt -print0 | sort -z ) |
+  while IFS= read -r -d '' f; do
+    f=${f#./}
+    install -D -m "$(stat -c %a "$REPO/$t/$f")" "$REPO/$t/$f" "$ROOT/$f"
+  done
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    render "$ROOT/$f"
+  done < "$REPO/$t/TEMPLATES.txt"
+  echo "installed $t/"
+done
+# sudoers files are validated before they can lock anyone out
+for f in "$ROOT"/etc/sudoers.d/s9-*; do
+  [ -e "$f" ] || continue
+  chmod 0440 "$f"
+  command -v visudo >/dev/null && ! visudo -cf "$f" >/dev/null && { echo "invalid sudoers file $f" >&2; rm -f "$f"; }
+done
+grep -rIl '@S9_[A-Z]*@' "$ROOT/etc/systemd" "$ROOT/etc/sudoers.d" "$ROOT/etc/polkit-1" "$ROOT/usr/local" 2>/dev/null \
+  && { echo "unrendered placeholders remain" >&2; exit 1; } || true
+
+# --- system settings ------------------------------------------------------------------
+mkdir -p "$ROOT/etc/default"
+echo "${C[S9_HOSTNAME]}" > "$ROOT/etc/hostname"
+ln -sf "/usr/share/zoneinfo/${C[S9_TZ]}" "$ROOT/etc/localtime"
+echo "${C[S9_TZ]}" > "$ROOT/etc/timezone"
+echo "LANG=${C[S9_LOCALE]}" > "$ROOT/etc/default/locale"
+{ echo "XKBLAYOUT=\"${C[S9_KEYMAP]}\""; echo "XKBVARIANT=\"${C[S9_KEYMAP_VARIANT]:-}\""; echo 'XKBMODEL="pc105"'; } > "$ROOT/etc/default/keyboard"
+
+# --- account ----------------------------------------------------------------------------
+# shadow-utils' --root option works on any directory with /etc/passwd, so no chroot (and
+# no qemu for a foreign-architecture rootfs) is needed.
+if [ "$ACCOUNT" = 1 ]; then
+  R=(); [ "$ROOT" = / ] || R=(--root "$ROOT")
+  have() { grep -q "^$2:" "$ROOT/etc/$1" 2>/dev/null; }
+  have passwd "$U" || useradd "${R[@]}" -m -u "${C[S9_UID]}" -d "${C[S9_HOME]}" -s /bin/bash "$U"
+  for g in android_graphics audio input netdev plugdev render sudo video; do
+    have group "$g" || groupadd "${R[@]}" -r "$g"
+    usermod "${R[@]}" -aG "$g" "$U"
+  done
+  if [ -n "${S9_PASSWORD_HASH:-}" ]; then
+    printf '%s:%s\n' "$U" "$S9_PASSWORD_HASH" | chpasswd "${R[@]}" -e
+  else
+    echo "note: no S9_PASSWORD_HASH given; the account has no password yet (run: passwd $U)" >&2
+  fi
+fi
+
+# --- services ---------------------------------------------------------------------------
+if [ "$ENABLE" = 1 ]; then
+  S=(systemctl); [ "$ROOT" = / ] || S=(systemctl --root="$ROOT")
+  while IFS= read -r u; do
+    case $u in ''|'#'*) continue;; esac
+    "${S[@]}" enable "$u" >/dev/null 2>&1 || echo "could not enable $u" >&2
+  done < "$REPO/installer/enabled-units.txt"
+  [ "$ROOT" = / ] && systemctl daemon-reload || true
+fi
+echo "done"

@@ -1,0 +1,34 @@
+#!/bin/bash
+set -euo pipefail
+MODE=${1:?uso: s9-uw-on 3840x1080@120.0}
+CFG=/etc/s9-miral.display
+BK=$CFG.before-uw-$(date +%Y%m%d-%H%M%S)
+cp -a "$CFG" "$BK"; echo "backup: $BK"
+python3 - "$CFG" "$MODE" <<'PY'
+import re,sys,os
+p,mode=sys.argv[1],sys.argv[2]
+out=[];inb=False;done=False
+for l in open(p).read().split('\n'):
+    if re.match(r'^\s+DisplayPort-1:\s*$',l): inb=True
+    elif re.match(r'^\s+LVDS-1:\s*$',l): inb=False
+    if inb and re.match(r'^\s+mode:',l): continue
+    out.append(l)
+    if inb and not done and re.match(r'^\s+orientation:',l):
+        out.append('        mode: '+mode); done=True
+if not done: sys.exit('ERRO: bloco DisplayPort-1 sem linha orientation; nada alterado')
+open(p+'.new','w').write('\n'.join(out))
+os.replace(p+'.new',p)
+PY
+diff -u "$BK" "$CFG" || true
+echo "== reiniciando o MirAL aninhado (fecha os apps do XFCE)"
+systemctl restart s9-miral-nested.service
+sleep 12
+systemctl is-active s9-miral-nested.service s9-lsc.service || true
+echo "== journal nested (60s)"
+journalctl -u s9-miral-nested --since "-60s" --no-pager | grep -iE "mode|display|output|3840|warn|error|fail" | cut -c1-220 | tail -30
+echo "== journal lsc (60s)"
+journalctl -u s9-lsc --since "-60s" --no-pager | grep -E "Output|Current mode|Preferred mode|Logical size" | cut -c1-200 | tail -10
+echo "== xrandr"
+for d in :0 :1; do DISPLAY=$d xrandr 2>&1 | head -6; done
+echo "== kernel"
+dmesg | grep -E "drm-dp|hdcp|unstable|out of sync|underrun" | tail -15

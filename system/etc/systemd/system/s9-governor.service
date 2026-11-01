@@ -1,0 +1,11 @@
+[Unit]
+Description=S9 CPU governor performance (reaplica se o Android/HAL mudar)
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'while true; do /usr/local/sbin/s9-governor-apply.sh; sleep 30; done'
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

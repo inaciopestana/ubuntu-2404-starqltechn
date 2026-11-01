@@ -1,0 +1,31 @@
+#!/bin/sh
+
+LOG=/var/log/s9-x11-terminal.log
+exec >>"$LOG" 2>&1
+
+echo
+echo "============================================================"
+echo "S9 X11 TERMINAL"
+date
+echo "pid=$$"
+echo "============================================================"
+
+echo "DISPLAY=${DISPLAY:-<VAZIO>}"
+echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<VAZIO>}"
+echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-<VAZIO>}"
+
+export GDK_BACKEND=x11
+export NO_AT_BRIDGE=1
+
+if [ -z "$DISPLAY" ]; then
+    echo "ERRO: DISPLAY NAO DEFINIDO"
+    exit 40
+fi
+
+echo "DISPLAY OK: $DISPLAY"
+
+exec dbus-run-session -- \
+    /usr/bin/xfce4-terminal \
+    --disable-server \
+    --maximize \
+    --title="Galaxy S9 - Xwayland"

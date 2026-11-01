@@ -1,0 +1,33 @@
+#!/bin/bash
+
+PANELPID="$(pgrep -u @S9_USER@ -x xfce4-panel | head -n1)"
+
+[ -n "$PANELPID" ] || exit 0
+
+DISPLAY_VAR="$(
+    tr "\0" "\n" < "/proc/$PANELPID/environ" |
+    sed -n "s/^DISPLAY=//p" |
+    head -n1
+)"
+
+[ -n "$DISPLAY_VAR" ] || exit 0
+
+export DISPLAY="$DISPLAY_VAR"
+
+# Força ABNT2 e força explicitamente o Alt direito como Level3/AltGr.
+setxkbmap \
+    -model abnt2 \
+    -layout br \
+    -option '' \
+    -option lv3:ralt_switch
+
+# Garante também que o keycode X11 108 (Linux KEY_RIGHTALT=100)
+# seja tratado como ISO_Level3_Shift.
+xmodmap \
+    -e 'keycode 108 = ISO_Level3_Shift ISO_Level3_Shift ISO_Level3_Shift ISO_Level3_Shift'
+
+# Recria o modificador Mod5 usado pelo terceiro nível.
+xmodmap -e 'remove mod1 = ISO_Level3_Shift' 2>/dev/null || true
+xmodmap -e 'add mod5 = ISO_Level3_Shift'
+
+exit 0

@@ -1,0 +1,24 @@
+#!/bin/bash
+# s9-x0-clean: remove /tmp/.X<N>-lock e /tmp/.X11-unix/X<N> quando o pid do lock nao e um servidor X vivo.
+# S9_X_TMP e S9_X_DRY existem so para teste.
+T=${S9_X_TMP:-/tmp}
+for lock in "$T"/.X*-lock; do
+  [ -e "$lock" ] || continue
+  n=${lock##*/.X}; n=${n%-lock}
+  case "$n" in ''|*[!0-9]*) continue;; esac
+  pid=$(tr -d ' \n' < "$lock" 2>/dev/null)
+  alive=0; comm=
+  if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+    comm=$(cat "/proc/$pid/comm" 2>/dev/null)
+    case "$comm" in Xwayland|Xorg|Xvfb|X) alive=1;; esac
+  fi
+  if [ "$alive" = 1 ]; then
+    echo "s9-x0-clean: :$n em uso pelo pid $pid ($comm); mantido"
+  elif [ -n "$S9_X_DRY" ]; then
+    echo "s9-x0-clean: :$n lock velho (pid ${pid:-?} nao e servidor X vivo); REMOVERIA $lock e $T/.X11-unix/X$n"
+  else
+    echo "s9-x0-clean: :$n lock velho (pid ${pid:-?} nao e servidor X vivo); removendo"
+    rm -f "$lock" "$T/.X11-unix/X$n"
+  fi
+done
+exit 0

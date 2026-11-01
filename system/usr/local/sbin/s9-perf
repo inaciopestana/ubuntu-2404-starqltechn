@@ -1,0 +1,97 @@
+#!/bin/bash
+# s9-perf: CPU e GPU em desempenho máximo. Modos: dry | apply | status | restore
+STATE=${S9_STATE:-/var/lib/s9-perf/orig.tsv}
+KG=${S9_KG:-/sys/class/kgsl/kgsl-3d0}
+CPU=${S9_CPU:-/sys/devices/system/cpu}
+DEVFREQ=${S9_DEVFREQ:-/sys/class/devfreq}
+THERMAL=${S9_THERMAL:-/sys/class/thermal}
+MODE=${1:-status}
+
+want(){  # linhas "caminho<TAB>valor"; só entra o que existe neste kernel
+  local c g f
+  for c in "$CPU"/cpu[0-9]*; do [ -e "$c/online" ] && printf '%s\t%s\n' "$c/online" 1; done
+  for c in "$CPU"/cpu[0-9]*; do [ -e "$c/core_ctl/enable" ] && printf '%s\t%s\n' "$c/core_ctl/enable" 0; done
+  for c in "$CPU"/cpu[0-9]*; do
+    if [ -e "$c/cpufreq/scaling_governor" ] && grep -qw performance "$c/cpufreq/scaling_available_governors" 2>/dev/null; then
+      printf '%s\t%s\n' "$c/cpufreq/scaling_governor" performance
+    fi
+  done
+  if [ -e "$KG/devfreq/governor" ] && grep -qw performance "$KG/devfreq/available_governors" 2>/dev/null; then
+    printf '%s\t%s\n' "$KG/devfreq/governor" performance
+  fi
+  [ -e "$KG/min_pwrlevel" ] && printf '%s\t%s\n' "$KG/min_pwrlevel" 0
+  for f in force_clk_on force_bus_on force_rail_on force_no_nap; do
+    [ -e "$KG/$f" ] && printf '%s\t%s\n' "$KG/$f" 1
+  done
+  for g in "$DEVFREQ"/*gpubw*; do
+    if [ -e "$g/governor" ] && grep -qw performance "$g/available_governors" 2>/dev/null; then
+      printf '%s\t%s\n' "$g/governor" performance
+    fi
+  done
+}
+
+declare -A ORIG
+load_state(){ [ -r "$STATE" ] || return 0; local p v; while IFS=$'\t' read -r p v; do ORIG["$p"]="$v"; done < "$STATE"; }
+save_orig(){ [ -n "${ORIG[$1]+x}" ] && return 0; mkdir -p "$(dirname "$STATE")"; printf '%s\t%s\n' "$1" "$2" >> "$STATE"; ORIG["$1"]="$2"; }
+
+CH=0; ER=0
+pass(){  # $1 = regex que filtra os caminhos tratados nesta passada
+  local p v cur new
+  while IFS=$'\t' read -r p v; do
+    cur=$(cat "$p" 2>/dev/null) || { echo "  ? não consegui ler $p"; continue; }
+    [ "$cur" = "$v" ] && continue
+    if [ "$MODE" = dry ]; then echo "  mudaria: $p: $cur -> $v"; CH=$((CH+1)); continue; fi
+    save_orig "$p" "$cur"
+    if echo "$v" > "$p" 2>/dev/null; then
+      new=$(cat "$p" 2>/dev/null)
+      if [ "$new" = "$v" ]; then echo "  mudou:   $p: $cur -> $new"; CH=$((CH+1))
+      else echo "  !! aceitou a escrita, mas leu '$new' (queria '$v'): $p"; ER=$((ER+1)); fi
+    else
+      echo "  !! ERRO ao escrever em $p"; ER=$((ER+1))
+    fi
+  done < <(want | grep -E "$1")
+}
+
+restore(){
+  [ -r "$STATE" ] || { echo "  sem estado salvo em $STATE (nada a restaurar)"; return 0; }
+  local p v fails=0; local -a L
+  mapfile -t L < <(tac "$STATE")
+  for line in "${L[@]}"; do
+    p=${line%%$'\t'*}; v=${line#*$'\t'}
+    if echo "$v" > "$p" 2>/dev/null; then echo "  restaurou: $p = $v"; else echo "  !! falhou ao restaurar $p"; fails=$((fails+1)); fi
+  done
+  if [ "$fails" -eq 0 ]; then rm -f "$STATE"; echo "  estado salvo removido"; else echo "  $fails falha(s): estado mantido em $STATE"; return 1; fi
+}
+
+status(){
+  local c n f g z t
+  echo "  CPU:"
+  for c in "$CPU"/cpu[0-9]*; do
+    n=${c##*/}
+    if [ -e "$c/cpufreq/scaling_governor" ]; then
+      printf '    %-5s gov=%-12s atual=%-8s max=%s\n' "$n" "$(cat "$c/cpufreq/scaling_governor" 2>/dev/null)" \
+        "$(cat "$c/cpufreq/scaling_cur_freq" 2>/dev/null)" "$(cat "$c/cpufreq/scaling_max_freq" 2>/dev/null)"
+    else echo "    $n sem cpufreq (offline?)"; fi
+  done
+  echo "  GPU ($KG):"
+  for f in devfreq/governor min_pwrlevel max_pwrlevel thermal_pwrlevel gpuclk max_gpuclk force_clk_on force_bus_on force_rail_on force_no_nap; do
+    [ -e "$KG/$f" ] && printf '    %-22s %s\n' "$f" "$(cat "$KG/$f" 2>/dev/null)"
+  done
+  for g in "$DEVFREQ"/*gpubw*; do [ -e "$g/governor" ] && printf '    gpubw governor         %s\n' "$(cat "$g/governor" 2>/dev/null)"; done
+  echo "  temperaturas (valor bruto, a unidade varia por zona):"
+  for z in "$THERMAL"/thermal_zone*; do
+    t=$(cat "$z/type" 2>/dev/null)
+    case "$t" in *cpu*|*gpu*|*cluster*|*skin*|*battery*|*xo*) printf '    %-24s %s\n' "$t" "$(cat "$z/temp" 2>/dev/null)" ;; esac
+  done | head -14
+}
+
+case "$MODE" in
+  dry)     load_state; echo "  (preflight: nada é escrito)"; pass '.'; echo "  $CH alteração(ões) pendente(s)" ;;
+  apply)   load_state; pass '/online$'; sleep 0.5; pass '.'
+           if [ -t 1 ] || [ $((CH+ER)) -gt 0 ]; then echo "  resumo: $CH alteração(ões), $ER erro(s)"; fi
+           [ $((CH+ER)) -gt 0 ] && ! [ -t 1 ] && logger -t s9-perf "reaplicado: $CH alteração(ões), $ER erro(s)"
+           [ "$ER" -eq 0 ] ;;
+  status)  status ;;
+  restore) restore ;;
+  *) echo "modo desconhecido: $MODE"; exit 2 ;;
+esac

@@ -1,0 +1,42 @@
+#!/bin/bash
+
+OUT="$HOME/Desktop/s9-dp-modes.txt"
+
+{
+    echo "============================================================"
+    echo "GALAXY S9 - DISPLAY / DP MODES"
+    date
+    echo "DISPLAY=${DISPLAY:-<vazio>}"
+    echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<vazio>}"
+    echo "============================================================"
+
+    echo
+    echo "===== MIROUT LSC ====="
+    MIR_SOCKET=/run/mir_socket mirout 2>&1 || true
+
+    echo
+    echo "===== MIROUT MIRAL ====="
+    MIR_SOCKET=/run/s9-miral/mir_socket mirout 2>&1 || true
+
+    echo
+    echo "===== XRANDR ====="
+    xrandr --query 2>&1
+
+    echo
+    echo "===== XRANDR MONITORS ====="
+    xrandr --listmonitors 2>&1
+
+    echo
+    echo "===== XRANDR VERBOSE ====="
+    xrandr --verbose 2>&1
+
+    echo
+    echo "===== MIRAL DISPLAY CONFIG ====="
+    cat /etc/s9-miral.display 2>&1
+
+} >"$OUT" 2>&1
+
+xfce4-terminal \
+  --disable-server \
+  --title="S9 DP Modes" \
+  --command="bash -c 'cat \"$OUT\"; echo; read -p \"ENTER para fechar\"'" &

@@ -1,0 +1,10 @@
+[Unit]
+Description=S9: reaplicar desempenho maximo a cada minuto
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=60s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

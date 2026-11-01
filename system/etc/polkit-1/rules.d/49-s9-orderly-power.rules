@@ -1,0 +1,11 @@
+polkit.addRule(function(action, subject) {
+    if (
+        action.id === "org.s9.orderly-power" &&
+        subject.user === "@S9_USER@" &&
+        action.lookup("program") ===
+            "/usr/local/sbin/s9-orderly-power" &&
+        action.lookup("user") === "root"
+    ) {
+        return polkit.Result.YES;
+    }
+});

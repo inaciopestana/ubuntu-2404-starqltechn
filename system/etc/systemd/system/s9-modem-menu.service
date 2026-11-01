@@ -1,0 +1,14 @@
+[Unit]
+Description=Submenu de dados moveis dentro do menu do nm-applet
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+User=@S9_USER@
+ExecStart=/usr/local/sbin/s9-modem-menu-launcher
+ExecStopPost=/usr/local/sbin/s9-modem-menu-launcher --unhide
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

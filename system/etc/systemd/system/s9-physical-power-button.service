@@ -1,0 +1,16 @@
+[Unit]
+Description=Galaxy S9 physical Power button handler
+Wants=systemd-logind.service
+After=systemd-logind.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/systemd-inhibit --what=handle-power-key --who=S9-PowerButton --why=Custom-screen-and-shutdown-control --mode=block /usr/bin/python3 -u /usr/local/sbin/s9-physical-power-button.py
+Restart=always
+RestartSec=2
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

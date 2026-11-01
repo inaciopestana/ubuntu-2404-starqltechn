@@ -1,0 +1,13 @@
+[Unit]
+Description=Galaxy S9 XFCE Panel Popup Positioning
+After=s9-miral-nested.service
+Wants=s9-miral-nested.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/s9-panel-popup-launcher
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

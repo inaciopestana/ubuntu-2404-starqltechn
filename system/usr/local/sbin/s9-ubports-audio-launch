@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+U=@S9_USER@
+
+# Esperar a sessao grafica e a montagem Halium.
+READY=0
+
+for i in $(seq 1 120); do
+    if [ -d /android/system ] &&
+       [ -d /android/vendor ] &&
+       [ -d /run/user/1000 ] &&
+       pgrep -u "$U" -x xfce4-panel >/dev/null; then
+        READY=1
+        break
+    fi
+    sleep 1
+done
+
+if [ "$READY" != 1 ]; then
+    echo "ERRO=SESSAO_HALIUM_XFCE_NAO_PRONTA" >&2
+    exit 1
+fi
+
+# Nunca criar duas instancias concorrentes.
+if pgrep -u "$U" -x pulseaudio >/dev/null; then
+    echo "ERRO=PULSEAUDIO_JA_EXECUTANDO" >&2
+    exit 1
+fi
+
+S9_DBUS=$(
+    ps -eo args=ww |
+    sed -n \
+      's/.*DBUS_SESSION_BUS_ADDRESS=\([^ ]*\).*\/usr\/bin\/nm-applet.*/\1/p' |
+    head -1
+) || true
+
+export S9_DBUS
+
+echo "HALIUM_PRONTO=1"
+echo "XFCE_PRONTO=1"
+
+exec /usr/bin/unshare \
+    --mount \
+    --propagation private \
+    -- /usr/local/sbin/s9-ubports-audio-in-namespace

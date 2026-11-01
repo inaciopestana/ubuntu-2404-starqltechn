@@ -1,0 +1,49 @@
+#!/bin/sh
+
+LOG=/var/log/s9-xfce-desktop.log
+exec >>"$LOG" 2>&1
+
+echo
+echo "============================================================"
+echo "S9 XFCE DESKTOP"
+date
+echo "pid=$$"
+echo "============================================================"
+
+echo "DISPLAY=${DISPLAY:-<VAZIO>}"
+echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<VAZIO>}"
+echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-<VAZIO>}"
+
+export GDK_BACKEND=x11
+export NO_AT_BRIDGE=1
+export GTK_USE_PORTAL=0
+
+if [ -z "$DISPLAY" ]; then
+    echo "ERRO: DISPLAY nao definido"
+    exit 40
+fi
+
+echo "===== INICIANDO DBUS + XFCE ====="
+
+exec dbus-run-session -- /bin/sh -c '
+    echo "DISPLAY=$DISPLAY"
+
+    echo "===== XFSETTINGSD ====="
+    xfsettingsd --replace &
+    sleep 2
+
+    echo "===== XFDESKTOP ====="
+    xfdesktop --replace &
+    sleep 2
+
+    echo "===== XFCE4-PANEL ====="
+    xfce4-panel --disable-wm-check &
+    sleep 3
+
+    echo "===== TERMINAL ====="
+    xfce4-terminal \
+        --disable-server \
+        --title="Galaxy S9 - XFCE" &
+
+    wait
+'

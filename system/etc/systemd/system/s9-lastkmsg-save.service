@@ -1,0 +1,8 @@
+[Unit]
+Description=Save previous-session kernel log (last_kmsg) and early boot dmesg
+After=local-fs.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/s9-lastkmsg-save
+[Install]
+WantedBy=multi-user.target

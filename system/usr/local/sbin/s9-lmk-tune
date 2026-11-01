@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Keeps the Android lowmemorykiller from killing the Wine tree (see s9-lmk-tune.sh for the reasoning).
+P=/sys/module/lowmemorykiller/parameters
+while :; do
+  . /etc/s9-lmk.conf
+  cur=$(cat $P/adj 2>/dev/null);     [ -n "$cur" ] && [ "$cur" != "$S9L_ADJ" ]     && echo "$S9L_ADJ"     > $P/adj     2>/dev/null
+  cur=$(cat $P/minfree 2>/dev/null); [ -n "$cur" ] && [ "$cur" != "$S9L_MINFREE" ] && echo "$S9L_MINFREE" > $P/minfree 2>/dev/null
+  sleep 3
+done

@@ -1,0 +1,98 @@
+#!/bin/sh
+
+( sleep 3; /usr/local/bin/s9-fix-abnt2 ) &
+
+# BEGIN S9 ZINK TURNIP
+# Driver GL da sessao. Padrao: Freedreno nativo (KGSL, Mesa Peekaboo).
+# Para voltar ao Zink/Turnip: touch /opt/s9-xwayland-gralloc/ZINK  e reiniciar s9-miral-nested.service
+if [ -e /opt/s9-xwayland-gralloc/ZINK ]; then
+  # OpenGL desktop: Zink -> Turnip KGSL -> Adreno 630
+  export VK_DRIVER_FILES=/opt/mesa-turnip-kgsl/share/vulkan/icd.d/freedreno_icd.aarch64.json
+  export MESA_LOADER_DRIVER_OVERRIDE=zink
+  export LIBGL_KOPPER_DRI2=1
+  export MESA_VK_WSI_DEBUG=sw
+else
+  # OpenGL desktop: Freedreno nativo -> KGSL -> Adreno 630 (Mesa Peekaboo)
+  S9_PK=/opt/mesa-kgsl-peekaboo
+  S9_L=$S9_PK/usr/lib/aarch64-linux-gnu
+  S9_LL=$S9_PK/llvm19/usr/lib/aarch64-linux-gnu
+  export LD_LIBRARY_PATH="$S9_L:$S9_LL${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export LIBGL_DRIVERS_PATH="$S9_L/dri"
+  export GBM_BACKENDS_PATH="$S9_L/gbm"
+  export __EGL_VENDOR_LIBRARY_FILENAMES="$S9_PK/teste/egl_mesa.json"
+  export MESA_LOADER_DRIVER_OVERRIDE=kgsl
+  export TU_DEBUG=noconform
+  export FD_KGSL_ENABLE_DMABUF=1
+fi
+# END S9 ZINK TURNIP
+
+
+LOG="$HOME/.s9-xfce-session.log"
+
+exec >>"$LOG" 2>&1
+
+echo
+echo "============================================================"
+echo "S9 XFCE USER SESSION"
+date
+id
+echo "DISPLAY=${DISPLAY:-<vazio>}"
+echo "============================================================"
+
+export GDK_BACKEND=x11
+export NO_AT_BRIDGE=1
+export GTK_USE_PORTAL=0
+
+export XDG_CURRENT_DESKTOP=XFCE
+export XDG_SESSION_DESKTOP=xfce
+export DESKTOP_SESSION=s9-xfce
+
+# Se o LightDM ainda não criou um session bus, criamos um.
+if [ "${1:-}" != "--inside-dbus" ] &&
+   [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+
+    exec dbus-run-session -- \
+        "$0" --inside-dbus
+fi
+
+echo "===== XFSETTINGSD ====="
+/usr/local/sbin/s9-display-runtime-probe &
+
+xfsettingsd --replace &
+
+sleep 1
+
+sleep 1
+
+echo "===== XFDESKTOP ====="
+xfdesktop --replace &
+
+#
+# Xfdesktop occasionally starts before its first RandR monitor refresh.
+# In that state its desktop window remains at the 200x200 placeholder
+# size and no wallpaper/icons are initialized.
+#
+# Wait until both XRandR and the xfdesktop X11 window exist, then force
+# the same reload that a later display hotplug would otherwise trigger.
+#
+i=0
+while [ "$i" -lt 10 ]; do
+    if xrandr --query 2>/dev/null | grep -q ' connected ' &&
+       xwininfo -root -tree 2>/dev/null |
+       grep -q '"Desktop": ("xfdesktop" "Xfdesktop")'; then
+        break
+    fi
+
+    i=$((i + 1))
+    sleep 1
+done
+
+echo "===== XFDESKTOP RELOAD ====="
+xfdesktop --reload || true
+
+sleep 1
+
+echo "===== XFCE PANEL ====="
+
+# O MirAL é o WM. NÃO iniciar xfwm4.
+exec xfce4-panel --disable-wm-check

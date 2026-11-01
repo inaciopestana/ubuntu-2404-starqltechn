@@ -1,0 +1,15 @@
+[Unit]
+Description=Keep the system clock monotonic across boots (the RTC is not battery-backed)
+DefaultDependencies=no
+After=systemd-remount-fs.service
+Before=sysinit.target systemd-timesyncd.service time-sync.target shutdown.target
+Conflicts=shutdown.target
+RequiresMountsFor=/var/lib/s9-clock
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/s9-clock-keep restore
+ExecStop=/usr/local/sbin/s9-clock-keep shutdown
+TimeoutStopSec=10
+[Install]
+WantedBy=sysinit.target

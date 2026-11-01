@@ -1,0 +1,210 @@
+#!/bin/bash
+# s9-docklike-fix - helper do Docklike (s9-docklike-ewmh.py):
+#   (1) chave da ponte do Chrome Wayland V1 -> V2 (a V1 impedia o laco de eventos de dormir: CPU alta)
+#   (2) S9_DOCKLIKE_PANEL_GEOM_V1: o teste "ponteiro no painel" usa a resolucao ATUAL da raiz e o painel real
+#       (d.screen().height_in_pixels e o retrato do momento da conexao e fica velho com dock/hotplug)
+# uso: s9-docklike-fix aplicar | status | cpu | reverter
+set -o pipefail
+HELPER=${S9D_HELPER:-/usr/local/libexec/s9-docklike-ewmh.py}
+STATE=${S9D_STATE:-/var/lib/s9-docklike-fix}
+SVC=s9-docklike-ewmh.service
+SYSCTL=${S9D_SYSTEMCTL:-systemctl}
+if [ "$(id -u)" != 0 ] && [ -z "${S9D_TEST:-}" ]; then exec sudo -n "$0" "$@"; fi
+
+patch_py() { # $1 origem  $2 destino ; rc 0 = alterado, 3 = nada a fazer
+python3 -I - "$1" "$2" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1], encoding='utf-8').read()
+lines = src.split('\n')
+changed = []
+
+# ---------- (1) ponte do Chrome: V1 -> V2 ----------
+if 'S9_CHROME_BRIDGE_SWITCH_V2' in src:
+    print('   chave da ponte: ja esta na V2')
+elif 'S9_CHROME_BRIDGE_SWITCH_V1' in src:
+    k = [i for i, l in enumerate(lines) if 'S9_CHROME_BRIDGE_SWITCH_V1' in l]
+    if len(k) != 1:
+        sys.exit('ERRO: marcador V1 deveria aparecer 1 vez')
+    k = k[0]
+    if not lines[k + 1].strip().startswith('if os.path.exists("/etc/s9-docklike/chrome-bridge.off")') or not lines[k + 4].strip().startswith('return'):
+        sys.exit('ERRO: bloco V1 diferente do esperado; nada alterado')
+    ret = lines[k + 4].strip()
+    del lines[k:k + 5]
+    idx = [i for i, l in enumerate(lines) if l.startswith('def s9_chrome_refresh(')]
+    if len(idx) != 1:
+        sys.exit('ERRO: def s9_chrome_refresh deveria existir 1 vez')
+    end = idx[0] + 1
+    while end < len(lines) and (lines[end].strip() == '' or lines[end].startswith((' ', '\t'))):
+        end += 1
+    poll = [j for j in range(idx[0] + 1, end) if re.match(r'^\s*s9_chrome_last_poll\s*=\s*now\s*$', lines[j])]
+    if len(poll) != 1:
+        sys.exit('ERRO: atribuicao de last_poll nao encontrada 1 vez')
+    p = poll[0]; ind = re.match(r'\s*', lines[p]).group(0)
+    lines[p + 1:p + 1] = [
+        ind + '# S9_CHROME_BRIDGE_SWITCH_V2: com /etc/s9-docklike/chrome-bridge.off a ponte do Chrome Wayland fica desligada',
+        ind + '# (depois de atualizar last_poll, senao o laco de eventos nunca dorme)',
+        ind + 'if os.path.exists("/etc/s9-docklike/chrome-bridge.off"):',
+        ind + '    if s9_chrome_proxy is not None:',
+        ind + '        s9_chrome_dispose()',
+        ind + '    ' + ret,
+    ]
+    changed.append('ponte V1->V2')
+    print('   chave da ponte: V1 trocada pela V2')
+else:
+    print('   chave da ponte: helper sem a chave (nada a converter)')
+
+# ---------- (2) geometria do painel ----------
+src2 = '\n'.join(lines)
+if 'S9_DOCKLIKE_PANEL_GEOM_V1' in src2:
+    print('   painel: ja tem o patch')
+else:
+    a = [i for i, l in enumerate(lines) if l.startswith('def s9_v2_pointer_on_panel(')]
+    b = [i for i, l in enumerate(lines) if l.startswith('def s9_v2_change_state(')]
+    if len(a) != 1 or len(b) != 1 or b[0] <= a[0]:
+        sys.exit('ERRO: s9_v2_pointer_on_panel / s9_v2_change_state nao encontradas na ordem esperada')
+    old = '\n'.join(lines[a[0]:b[0]])
+    for need in ('d.screen().height_in_pixels', 'xfce4-panel', 'root.query_pointer()'):
+        if need not in old:
+            sys.exit('ERRO: funcao antiga sem "%s"; versao inesperada, nada alterado' % need)
+    new = '''def s9_v2_pointer_on_panel():
+    # S9_DOCKLIKE_PANEL_GEOM_V1
+    # d.screen() e o retrato do momento em que o helper conectou ao X: com dock ligada
+    # depois do boot ou hotplug ele fica velho. Usar a geometria ATUAL da raiz e o
+    # painel real (janela xfce4-panel mapeada e fina) para decidir se o clique foi nele.
+    pointer = root.query_pointer()
+    px = int(pointer.root_x)
+    py = int(pointer.root_y)
+
+    try:
+        geo = root.get_geometry()
+        sw, sh = int(geo.width), int(geo.height)
+    except Exception:
+        sw = int(d.screen().width_in_pixels)
+        sh = int(d.screen().height_in_pixels)
+    stale_w = int(d.screen().width_in_pixels)
+    stale_h = int(d.screen().height_in_pixels)
+
+    n = getattr(s9_v2_pointer_on_panel, "_n", 0)
+    if (stale_w, stale_h) != (sw, sh) and n < 3:
+        s9_v2_pointer_on_panel._n = n + 1
+        print(
+            f"S9_DOCKLIKE_PANEL_GEOM stale={stale_w}x{stale_h} "
+            f"live={sw}x{sh} (retrato velho da conexao x geometria atual)",
+            flush=True
+        )
+
+    panels = []
+
+    for w in root.query_tree().children:
+        try:
+            cls = w.get_wm_class() or ()
+            names = {str(c).lower() for c in cls}
+
+            if "xfce4-panel" not in names:
+                continue
+
+            if w.get_attributes().map_state != X.IsViewable:
+                continue
+
+            g = w.get_geometry()
+            x, y, width, height = int(g.x), int(g.y), int(g.width), int(g.height)
+
+            # a barra do painel e fina (<= 64 px) e longa; popups/menus nao contam
+            if min(width, height) > 64 or max(width, height) < 100:
+                continue
+
+            panels.append((x, y, width, height))
+        except Exception:
+            continue
+
+    if panels:
+        inside = any(
+            x <= px < x + width and
+            y <= py < y + height
+            for x, y, width, height in panels
+        )
+        if not inside:
+            m = getattr(s9_v2_pointer_on_panel, "_m", 0)
+            if m < 10:
+                s9_v2_pointer_on_panel._m = m + 1
+                print(
+                    f"S9_DOCKLIKE_PANEL_GEOM fora-do-painel pointer=({px},{py}) "
+                    f"paineis={panels} tela={sw}x{sh}",
+                    flush=True
+                )
+        return inside, px, py
+
+    # Painel nao identificavel: heuristica de borda com a resolucao ATUAL.
+    if not (py < 36 or py >= sh - 36):
+        return False, px, py
+
+    return True, px, py
+
+'''
+    lines[a[0]:b[0]] = new.rstrip('\n').split('\n') + ['', '']
+    changed.append('painel GEOM_V1')
+    print('   painel: funcao s9_v2_pointer_on_panel substituida (%d -> %d linhas)' % (b[0] - a[0], len(new.split('\n'))))
+
+if not changed:
+    print('NADA_A_FAZER'); sys.exit(3)
+open(sys.argv[2], 'w', encoding='utf-8').write('\n'.join(lines))
+print('   alteracoes: ' + ', '.join(changed))
+PYEOF
+}
+
+cpu_helper() {
+  local pid t1 t2 hz=$(getconf CLK_TCK)
+  pid=$($SYSCTL show -P MainPID $SVC)
+  case "$pid" in ""|0) echo "helper parado/indisponivel"; return;; esac
+  [ -r /proc/$pid/stat ] || { echo "sem /proc/$pid/stat"; return; }
+  t1=$(awk '{print $14+$15}' /proc/$pid/stat); sleep 6; t2=$(awk '{print $14+$15}' /proc/$pid/stat)
+  echo "   helper pid=$pid: $(( (t2-t1)*100/hz/6 ))% de um nucleo (media de 6 s)"
+}
+
+do_aplicar() {
+  [ -f "$HELPER" ] || { echo "ERRO: falta $HELPER"; exit 1; }
+  mkdir -p "$STATE"
+  echo "[1/5] patch (em arquivo temporario; o helper so e trocado se tudo validar)"
+  rc=0; patch_py "$HELPER" "$STATE/helper.new" || rc=$?
+  if [ "$rc" = 3 ]; then echo "nada a fazer"; exit 0; fi
+  [ "$rc" = 0 ] || { echo "ERRO no patch (rc=$rc); helper mantido"; exit 1; }
+  python3 -m py_compile "$STATE/helper.new" && echo "   py_compile ok" || { echo "ERRO: helper patchado invalido; mantido o atual"; rm -f "$STATE/helper.new"; exit 1; }
+  rm -rf "$STATE/__pycache__"
+  echo "[2/5] CPU ANTES"; [ -z "${S9D_TEST:-}" ] && cpu_helper
+  TS=$(date +%Y%m%d-%H%M%S); BK=$STATE/helper-$TS.py
+  echo "[3/5] backup do helper atual -> $BK"; cp -pv "$HELPER" "$BK"; echo "$BK" > "$STATE/last_backup"
+  cat "$STATE/helper.new" > "$HELPER"; rm -f "$STATE/helper.new"
+  echo "[4/5] reiniciando so o helper"
+  if [ -z "${S9D_TEST:-}" ]; then
+    $SYSCTL restart $SVC; sleep 4; $SYSCTL is-active $SVC
+    journalctl -u $SVC --no-pager -n 8
+  else echo "   (teste)"; fi
+  echo "[5/5] CPU DEPOIS"; [ -z "${S9D_TEST:-}" ] && cpu_helper
+  echo
+  echo "PRONTO. Teste: abra Chrome/Thunar e clique 2x no icone de cada um na dock (a 2a deve minimizar)."
+  echo "Ver as decisoes:  journalctl -u $SVC --no-pager --since '-3min' | grep -aE 'S9_DOCKLIKE_(CLICK|REJECT|PANEL_GEOM)'"
+  echo "Voltar atras:     s9-docklike-fix reverter"
+}
+
+do_status() {
+  echo "marcadores no helper:"; grep -c 'S9_DOCKLIKE_PANEL_GEOM_V1' "$HELPER" | sed 's/^/   PANEL_GEOM_V1: /'
+  echo "   CHROME_SWITCH_V2: $(grep -c S9_CHROME_BRIDGE_SWITCH_V2 "$HELPER")  V1: $(grep -c S9_CHROME_BRIDGE_SWITCH_V1 "$HELPER")"
+  echo "ultimo backup: $(cat "$STATE/last_backup" 2>&1)"
+  [ -z "${S9D_TEST:-}" ] && { cpu_helper; journalctl -u $SVC --no-pager --since "-10min" | grep -aE 'S9_DOCKLIKE_(CLICK|REJECT|PANEL_GEOM)' | tail -n 15; }
+}
+
+do_reverter() {
+  BK=$(cat "$STATE/last_backup" 2>/dev/null)
+  [ -f "$BK" ] || { echo "ERRO: backup nao encontrado ($BK)"; exit 1; }
+  cat "$BK" > "$HELPER"; echo "helper restaurado de $BK"
+  [ -z "${S9D_TEST:-}" ] && { $SYSCTL restart $SVC; sleep 3; $SYSCTL is-active $SVC; }
+  mv -f "$STATE/last_backup" "$STATE/last_backup.revertido"
+}
+
+case "${1:-}" in
+  aplicar)  do_aplicar ;;
+  status)   do_status ;;
+  cpu)      cpu_helper ;;
+  reverter) do_reverter ;;
+  *) echo "uso: s9-docklike-fix aplicar | status | cpu | reverter"; exit 1 ;;
+esac

@@ -1,0 +1,2 @@
+KERNEL=="ion", OWNER="root", GROUP="android_graphics", MODE="0660"
+KERNEL=="kgsl-3d0", OWNER="root", GROUP="android_graphics", MODE="0660"

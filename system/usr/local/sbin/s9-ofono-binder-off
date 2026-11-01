@@ -1,0 +1,7 @@
+#!/bin/bash
+[ "$(id -u)" = 0 ] || { echo "precisa de root"; exit 1; }
+[ "${1:-}" = "--yes" ] || { echo "uso: $0 --yes"; exit 2; }
+rm -f /etc/systemd/system/ofono.service.d/s9-binder.conf
+rmdir /etc/systemd/system/ofono.service.d 2>/dev/null
+systemctl daemon-reload; systemctl restart ofono
+echo "drop-in removido; ofono voltou a usar o ofonod-wrapper."

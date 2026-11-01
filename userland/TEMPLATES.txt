@@ -1,0 +1,2 @@
+usr/local/bin/s9-fix-abnt2
+usr/local/libexec/s9-docklike-x11-access.sh

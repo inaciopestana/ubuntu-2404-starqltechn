@@ -1,0 +1,13 @@
+#!/bin/bash
+# Roda no ExecStop de s9-pre-shutdown.service (antes de ofono e s9-phoned pararem). Sem systemctl aqui (travaria o desligamento).
+L(){ logger -t s9-pre-shutdown "$*"; echo "$(date '+%F %T') $*" >> /var/lib/s9-pre-shutdown.log; }
+L "inicio"
+timeout 3 /usr/local/bin/s9-phone hangup >/dev/null 2>&1; L "hangup rc=$?"
+if systemctl is-active --quiet ofono.service; then
+  timeout 12 /usr/local/sbin/s9-modem down >/dev/null 2>&1; L "s9-modem down rc=$?"
+  R=$(timeout 20 /usr/local/sbin/s9-ofono-online false 15 2>&1 | tr '\n' ' '); L "modem offline: ${R:-sem saida}"
+else
+  L "ofono parado: nada a fazer"
+fi
+sync; L "fim"
+exit 0

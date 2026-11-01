@@ -1,0 +1,12 @@
+[Unit]
+Description=Galaxy S9 Halium graphics preflight
+After=local-fs.target
+Before=s9-mir.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/s9-halium-preflight
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

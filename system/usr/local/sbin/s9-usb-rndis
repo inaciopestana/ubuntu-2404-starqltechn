@@ -1,0 +1,225 @@
+#!/bin/sh
+
+LOG=/var/log/s9-usb-rndis.log
+G=/sys/kernel/config/usb_gadget/s9debug
+
+exec >>"$LOG" 2>&1
+
+cleanup_own_gadget()
+{
+    [ -d "$G" ] || return 0
+
+    [ -e "$G/UDC" ] &&
+        printf '\n' > "$G/UDC" 2>/dev/null || true
+
+    rm -f \
+        "$G/configs/c.1/net" \
+        "$G/configs/c.1/rndis.usb0" \
+        "$G/configs/c.1/ecm.usb0" \
+        2>/dev/null || true
+
+    rmdir "$G/configs/c.1/strings/0x409" 2>/dev/null || true
+    rmdir "$G/configs/c.1" 2>/dev/null || true
+
+    rmdir "$G/functions/rndis.usb0" 2>/dev/null || true
+    rmdir "$G/functions/ecm.usb0" 2>/dev/null || true
+
+    rmdir "$G/strings/0x409" 2>/dev/null || true
+    rmdir "$G" 2>/dev/null || true
+}
+
+unbind_all_gadgets()
+{
+    for F in /sys/kernel/config/usb_gadget/*/UDC
+    do
+        [ -e "$F" ] || continue
+
+        CUR="$(cat "$F" 2>/dev/null || true)"
+
+        if [ -n "$CUR" ]; then
+            echo "unbind: $F = $CUR"
+            printf '\n' > "$F" 2>/dev/null || true
+        fi
+    done
+}
+
+start_gadget()
+{
+    echo
+    echo "============================================================"
+    echo "S9 USB DEBUG NETWORK"
+    date
+    echo "============================================================"
+
+    mountpoint -q /sys/kernel/config ||
+        mount -t configfs none /sys/kernel/config ||
+        return 10
+
+    echo
+    echo "===== ANDROID USB -> NONE ====="
+
+    if command -v lxc-attach >/dev/null 2>&1; then
+        lxc-attach -n android -- \
+            setprop sys.usb.config none \
+            2>/dev/null || true
+
+        sleep 2
+    fi
+
+    echo
+    echo "===== UDC ====="
+
+    UDC="$(ls /sys/class/udc 2>/dev/null | sed -n '1p')"
+
+    echo "UDC=$UDC"
+
+    [ -n "$UDC" ] || return 11
+
+
+    echo
+    echo "===== UNBIND GADGETS EXISTENTES ====="
+
+    unbind_all_gadgets
+    sleep 2
+
+    cleanup_own_gadget
+
+
+    echo
+    echo "===== CRIANDO GADGET ====="
+
+    mkdir -p "$G" || return 12
+
+    printf '0x1d6b\n' > "$G/idVendor" || return 13
+    printf '0x0104\n' > "$G/idProduct" || return 14
+    printf '0x0200\n' > "$G/bcdUSB" || return 15
+
+    mkdir -p "$G/strings/0x409" || return 16
+
+    printf 'S9DEBUG0001\n' \
+        > "$G/strings/0x409/serialnumber" || return 17
+
+    printf 'Samsung\n' \
+        > "$G/strings/0x409/manufacturer" || return 18
+
+    printf 'Galaxy S9 Ubuntu Debug\n' \
+        > "$G/strings/0x409/product" || return 19
+
+    mkdir -p \
+        "$G/configs/c.1/strings/0x409" \
+        || return 20
+
+    printf 'USB Debug Network\n' \
+        > "$G/configs/c.1/strings/0x409/configuration" \
+        || return 21
+
+    printf '250\n' \
+        > "$G/configs/c.1/MaxPower" \
+        || return 22
+
+
+    echo
+    echo "===== FUNCAO DE REDE ====="
+
+    FUNC=""
+
+    if mkdir "$G/functions/rndis.usb0" 2>/dev/null; then
+        FUNC=rndis.usb0
+        echo "Usando RNDIS"
+    elif [ -d "$G/functions/rndis.usb0" ]; then
+        FUNC=rndis.usb0
+        echo "Usando RNDIS existente"
+    elif mkdir "$G/functions/ecm.usb0" 2>/dev/null; then
+        FUNC=ecm.usb0
+        echo "Usando ECM"
+    elif [ -d "$G/functions/ecm.usb0" ]; then
+        FUNC=ecm.usb0
+        echo "Usando ECM existente"
+    else
+        echo "ERRO: nem RNDIS nem ECM disponíveis"
+        return 23
+    fi
+
+    ln -s \
+        "$G/functions/$FUNC" \
+        "$G/configs/c.1/$FUNC" \
+        || return 24
+
+
+    echo
+    echo "===== BIND UDC ====="
+
+    printf '%s\n' "$UDC" > "$G/UDC" || return 25
+
+    cat "$G/UDC"
+
+
+    echo
+    echo "===== ESPERANDO INTERFACE ====="
+
+    n=0
+    IFACE=""
+
+    while [ "$n" -lt 30 ]
+    do
+        for I in usb0 rndis0
+        do
+            if ip link show "$I" >/dev/null 2>&1; then
+                IFACE="$I"
+                break
+            fi
+        done
+
+        [ -n "$IFACE" ] && break
+
+        n=$((n + 1))
+        sleep 1
+    done
+
+    echo "IFACE=$IFACE"
+
+    [ -n "$IFACE" ] || return 26
+
+
+    echo
+    echo "===== CONFIGURANDO IP ====="
+
+    ip addr flush dev "$IFACE" || true
+
+    ip addr add \
+        172.16.42.1/24 \
+        dev "$IFACE" \
+        || return 27
+
+    ip link set "$IFACE" up || return 28
+
+    ip -br addr show "$IFACE"
+
+    printf '%s\n' "$IFACE" \
+        > /run/s9-usb-debug-interface
+
+    echo
+    echo "===== USB DEBUG READY ====="
+}
+
+stop_gadget()
+{
+    cleanup_own_gadget
+}
+
+main()
+{
+    case "${1:-start}" in
+        start)
+            start_gadget
+            ;;
+        stop)
+            stop_gadget
+            ;;
+        *)
+            return 2
+            ;;
+    esac
+}
+
+main "$@"

@@ -1,0 +1,12 @@
+[Unit]
+Description=Galaxy S9 physical volume keys to PulseAudio Droid
+After=systemd-udev-trigger.service s9-ubports-audio-hidl.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 -u /usr/local/sbin/s9-physical-volume.py
+Restart=on-failure
+RestartSec=4
+
+[Install]
+WantedBy=multi-user.target

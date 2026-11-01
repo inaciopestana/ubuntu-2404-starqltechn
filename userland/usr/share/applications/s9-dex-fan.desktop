@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DeX Station Fan
+Comment=Control the DeX Station fan (Auto / High / Medium / Low / Off)
+Exec=/usr/local/bin/s9-dex-fan-window
+Icon=s9-dex-fan
+Terminal=false
+Categories=X-S9-Telephony;
+StartupNotify=false

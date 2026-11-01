@@ -1,0 +1,29 @@
+#!/bin/sh
+set -eu
+
+LSC_FLAGS="--enable-num-framebuffers-quirk=true --disable-overlays=false"
+
+if [ -r /etc/environment ]; then
+    . /etc/environment
+fi
+
+export ANDROID_ROOT="${ANDROID_ROOT:-/android/system}"
+
+if [ -d /etc/default/lsc-wrapper.d ]; then
+    for f in /etc/default/lsc-wrapper.d/*; do
+        [ -r "$f" ] && . "$f"
+    done
+fi
+
+export MIR_SERVER_ENABLE_MIRCLIENT=1
+export LD_PRELOAD=libtls-padding.so
+export XDG_RUNTIME_DIR=/run
+export WAYLAND_DISPLAY=wayland-syscomp
+
+exec /usr/sbin/lomiri-system-compositor \
+    $LSC_FLAGS \
+    --file=/run/mir_socket \
+    --debug-without-dm \
+    --debug-active-session-name=s9-xfce-nested \
+    --cursor=software \
+    --console-provider=vt

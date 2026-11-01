@@ -1,0 +1,12 @@
+[Unit]
+Description=Galaxy S9 DeX Station fan controller
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/s9-dex-fan daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

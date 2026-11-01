@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if systemctl is-active --quiet \
+    s9-poweroff-menu-5s.timer; then
+    echo "POWEROFF_ALREADY_SCHEDULED=1"
+    exit 0
+fi
+
+exec /usr/bin/systemd-run \
+    --unit=s9-poweroff-menu-5s \
+    --on-active=5s \
+    /usr/bin/systemctl poweroff

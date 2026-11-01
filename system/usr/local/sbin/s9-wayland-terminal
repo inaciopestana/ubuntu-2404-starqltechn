@@ -1,0 +1,59 @@
+#!/bin/sh
+
+LOG=/var/log/s9-wayland-terminal.log
+exec >>"$LOG" 2>&1
+
+echo
+echo "============================================================"
+echo "S9 WAYLAND TERMINAL"
+date
+echo "pid=$$"
+echo "============================================================"
+
+export HOME=/root
+export XDG_RUNTIME_DIR=/run/s9-miral
+export WAYLAND_DISPLAY=wayland-0
+
+# Obriga GTK a não procurar X11
+export GDK_BACKEND=wayland
+export NO_AT_BRIDGE=1
+
+echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+echo "WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
+echo "GDK_BACKEND=$GDK_BACKEND"
+
+echo
+echo "===== ESPERANDO WAYLAND SOCKET ====="
+
+i=0
+while [ ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; do
+    i=$((i + 1))
+
+    if [ "$i" -gt 30 ]; then
+        echo "ERRO: socket Wayland nao apareceu:"
+        ls -la "$XDG_RUNTIME_DIR" 2>&1
+        exit 30
+    fi
+
+    sleep 1
+done
+
+echo "===== SOCKET OK ====="
+ls -l "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+
+echo
+echo "===== DBUS ====="
+command -v dbus-run-session || {
+    echo "ERRO: dbus-run-session AUSENTE"
+    exit 31
+}
+
+echo
+echo "===== XFCE4-TERMINAL ====="
+command -v xfce4-terminal || exit 32
+
+exec dbus-run-session -- \
+    /usr/bin/xfce4-terminal \
+    --disable-server \
+    --maximize \
+    --title="Galaxy S9 - Wayland"

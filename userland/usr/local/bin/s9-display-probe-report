@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+
+set -u
+
+BASE=/var/log/s9-display-probe
+RUN="$(readlink -f "$BASE/latest" 2>/dev/null || true)"
+
+if [ -z "$RUN" ] || [ ! -d "$RUN" ]; then
+    echo "Nenhum probe encontrado."
+    exit 1
+fi
+
+echo "============================================================"
+echo "S9 DISPLAY PROBE REPORT"
+echo "============================================================"
+echo "RUN=$RUN"
+echo "TIME=$(date --iso-8601=ns)"
+
+echo
+echo "===== PROBE EVENTS ====="
+cat "$RUN/probe.log" 2>/dev/null || true
+
+echo
+echo "===== SYSTEMD FOLLOW - TAIL 250 ====="
+tail -250 "$RUN/systemd-follow.log" 2>/dev/null || true
+
+echo
+echo "===== KERNEL FOLLOW - TAIL 350 ====="
+tail -350 "$RUN/kernel-follow.log" 2>/dev/null || true
+
+echo
+echo "===== DRM UDEV ====="
+cat "$RUN/drm-udev.log" 2>/dev/null || true
+
+echo
+echo "===== ANDROID LOGCAT DISPLAY/CRASH ====="
+
+grep -Ei \
+    'hwcomposer|surfaceflinger|display|drm|dp |displayport|hdcp|hpd|crash|fatal|segv|tombstone|composer' \
+    "$RUN/android-logcat.log" \
+    2>/dev/null |
+tail -500 || true
+
+echo
+echo "===== SNAPSHOTS ====="
+
+for f in "$RUN"/event-*.txt; do
+
+    [ -f "$f" ] || continue
+
+    echo
+    echo "############################################################"
+    echo "FILE=$f"
+    echo "############################################################"
+
+    cat "$f"
+done

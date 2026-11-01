@@ -1,0 +1,183 @@
+#!/bin/sh
+
+LOG=/var/log/s9-display-watch.log
+
+exec >>"$LOG" 2>&1
+
+DISPLAY="${DISPLAY:-:0}"
+export DISPLAY
+
+echo
+echo "============================================================"
+echo "S9 DISPLAY GEOMETRY CONVERGENCE WATCH"
+date
+echo "DISPLAY=$DISPLAY"
+echo "============================================================"
+
+sleep 2
+
+supports_mode()
+{
+    OUT="$1"
+    MODE="$2"
+
+    printf '%s\n' "$XR" |
+    awk -v out="$OUT" -v mode="$MODE" '
+        $1 == out && $2 == "connected" {
+            inside = 1
+            next
+        }
+
+        inside && ($2 == "connected" || $2 == "disconnected") {
+            inside = 0
+        }
+
+        inside && $1 == mode {
+            found = 1
+        }
+
+        END {
+            if (found)
+                print "yes"
+        }
+    '
+}
+
+apply_layout()
+{
+    XR="$(xrandr --query 2>&1)" || return 1
+
+    CONNECTED="$(
+        printf '%s\n' "$XR" |
+        awk '$2 == "connected" { print $1 }'
+    )"
+
+    [ -n "$CONNECTED" ] || return 0
+
+    CHOSEN=""
+    MODE=""
+    ROT="normal"
+    KIND=""
+
+    #
+    # DisplayPort ganha prioridade quando presente.
+    #
+    for O in $CONNECTED
+    do
+        if [ "$(supports_mode "$O" 3840x2160)" = "yes" ]; then
+            CHOSEN="$O"
+            MODE="3840x2160"
+            ROT="normal"
+            KIND="external"
+        fi
+    done
+
+    #
+    # Sem DP: painel interno.
+    #
+    if [ -z "$CHOSEN" ]; then
+        for O in $CONNECTED
+        do
+            if [ "$(supports_mode "$O" 1440x2960)" = "yes" ]; then
+                CHOSEN="$O"
+                MODE="1440x2960"
+                ROT="normal"
+                KIND="internal"
+            fi
+        done
+    fi
+
+    #
+    # Fallback para alguma saída desconhecida.
+    #
+    if [ -z "$CHOSEN" ]; then
+        CHOSEN="$(
+            printf '%s\n' "$CONNECTED" |
+            sed -n '1p'
+        )"
+
+        ROT="normal"
+        KIND="fallback"
+    fi
+
+    echo
+    echo "===== CONVERGENCIA ====="
+    date
+    echo "connected:"
+    printf '%s\n' "$CONNECTED"
+    echo "chosen=$CHOSEN"
+    echo "kind=$KIND"
+    echo "mode=${MODE:-auto}"
+    echo "rotation=$ROT"
+
+    #
+    # Primeiro configura a saída desejada.
+    #
+    if [ -n "$MODE" ]; then
+
+        xrandr \
+            --output "$CHOSEN" \
+            --mode "$MODE" \
+            --rotate "$ROT" \
+            --primary \
+            --pos 0x0 \
+            2>&1 || true
+
+    else
+
+        xrandr \
+            --output "$CHOSEN" \
+            --auto \
+            --rotate "$ROT" \
+            --primary \
+            --pos 0x0 \
+            2>&1 || true
+    fi
+
+    #
+    # Depois tenta retirar as outras saídas.
+    #
+    for O in $CONNECTED
+    do
+        [ "$O" = "$CHOSEN" ] && continue
+
+        echo "desligando $O"
+
+        xrandr \
+            --output "$O" \
+            --off \
+            2>&1 || true
+    done
+
+    #
+    # Reafirma a geometria depois do resize.
+    #
+    if [ -n "$MODE" ]; then
+
+        xrandr \
+            --output "$CHOSEN" \
+            --mode "$MODE" \
+            --rotate "$ROT" \
+            --primary \
+            --pos 0x0 \
+            2>&1 || true
+    fi
+
+    echo "===== RESULTADO ====="
+    xrandr --query 2>&1 || true
+    xrandr --listmonitors 2>&1 || true
+}
+
+PREVIOUS=""
+
+while :
+do
+    CURRENT="$(xrandr --query 2>/dev/null || true)"
+
+    if [ "$CURRENT" != "$PREVIOUS" ]; then
+        apply_layout
+        PREVIOUS="$(xrandr --query 2>/dev/null || true)"
+    fi
+
+    sleep 2
+done

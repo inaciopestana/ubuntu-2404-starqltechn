@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""Bandeja da ventoinha da DeX Station: Auto / High / Medium / Low / Off.
+
+Aparece no painel somente quando a dock (04e8:a020) esta conectada.
+Controla o servico via `sudo -n /usr/local/sbin/s9-dex-fan <modo>`.
+Uso: s9-dex-fan-tray [--selftest | --make-icons]
+"""
+import os, sys, glob, fcntl, subprocess, threading, importlib, time
+
+CLI = '/usr/local/sbin/s9-dex-fan'
+IDS = os.environ.get('S9FAN_IDS', '/sys/class/sec/ccic/usbpd_ids')
+PARTNER = os.environ.get('S9FAN_PARTNER', '/sys/class/typec/port0-partner')
+THERM = os.environ.get('S9FAN_THERM', '/sys/class/thermal')
+SDIR = os.environ.get('S9FAN_STATE', '/var/lib/s9-dex-fan')
+ICONS = os.environ.get('S9FAN_ICONS', '/usr/local/share/s9-dex-fan/icons')
+LEVELS = ['off', 'low', 'medium', 'high']
+COLORS = {'off': '#8a8f98', 'low': '#3fb950', 'medium': '#f0a000', 'high': '#e5484d'}
+MODES = [('auto', 'Auto'), ('high', 'High'), ('medium', 'Medium'), ('low', 'Low'), ('off', 'Off')]
+POLL_S = 3          # leitura interna (icone, modo, dock)
+DISPLAY_S = 10      # a temperatura exibida no menu atualiza mais devagar (media do intervalo)
+
+
+# ---------- icones ----------
+FG = '#ffffff'
+BARS = {'off': 0, 'low': 1, 'medium': 2, 'high': 3}
+
+
+def svg(level, auto):
+    """Monocromatico (branco): helice + 3 barras de velocidade; Auto = selo 'A' vazado."""
+    n = BARS[level]
+    cx, cy, r = 8.6, 12.0, 7.2
+    blades = ''.join('<ellipse cx="%.1f" cy="%.1f" rx="2.1" ry="3.1" transform="rotate(%d %.1f %.1f)"/>'
+                     % (cx, cy - 3.6, a, cx, cy) for a in (0, 120, 240))
+    bars = ''
+    for i, (x, h) in enumerate(((16.8, 5.0), (19.2, 9.0), (21.6, 13.0))):
+        y = 22.0 - h
+        if i < n:
+            bars += '<rect x="%.1f" y="%.1f" width="1.8" height="%.1f" rx="0.4" fill="%s"/>' % (x, y, h, FG)
+        else:
+            bars += ('<rect x="%.2f" y="%.2f" width="1.2" height="%.1f" rx="0.3" fill="none" '
+                     'stroke="%s" stroke-width="0.6"/>' % (x + 0.3, y + 0.3, h - 0.6, FG))
+    slash = ('<path d="M2.6 21.4L14.6 2.6" stroke="%s" stroke-width="1.6" stroke-linecap="round"/>' % FG) if n == 0 else ''
+    # selo Auto: circulo branco com a letra A vazada (evenodd)
+    badge = ''
+    if auto:
+        badge = ('<path fill="%s" fill-rule="evenodd" d="M20.4 .8a3.9 3.9 0 1 0 .01 0z '
+                 'M20.4 2.3l1.9 4.6h-1l-.35-1h-1.1l-.35 1h-1z M20.4 3.9l-.4 1.1h.8z"/>' % FG)
+    return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">'
+            '<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="%s" stroke-width="1.4"/>'
+            '<g fill="%s">%s<circle cx="%.1f" cy="%.1f" r="1.7"/></g>%s%s%s</svg>\n'
+            % (cx, cy, r, FG, FG, blades, cx, cy, slash, bars, badge))
+
+
+def make_icons(d=ICONS):
+    os.makedirs(d, exist_ok=True)
+    n = 0
+    for lv in LEVELS:
+        for auto in (False, True):
+            name = 's9-dex-fan-%s%s' % (lv, '-auto' if auto else '')
+            with open(os.path.join(d, name + '.svg'), 'w') as f:
+                f.write(svg(lv, auto))
+            n += 1
+    return n
+
+
+# ---------- estado ----------
+def dock_present():
+    try:
+        if 'a020' not in open(IDS).read().lower():
+            return False
+    except OSError:
+        return False
+    return os.path.exists(PARTNER)
+
+
+def read_temp():
+    best = None
+    for z in glob.glob(THERM + '/thermal_zone*'):
+        try:
+            t = open(z + '/type').read().strip()
+            if not (t.endswith('-usr') and (t.startswith('cpu') or t.startswith('gpu'))):
+                continue
+            v = int(open(z + '/temp').read().strip())
+        except (OSError, ValueError):
+            continue
+        v = v / 1000.0 if abs(v) > 1000 else float(v)
+        best = v if best is None or v > best else best
+    return best
+
+
+def read_state():
+    st = {'dock': dock_present(), 'mode': 'auto', 'level': 'low', 'temp': read_temp()}
+    try:
+        m = open(SDIR + '/mode').read().strip()
+        if m == 'auto' or m in LEVELS:
+            st['mode'] = m
+    except OSError:
+        pass
+    try:
+        lv = open(SDIR + '/last').read().split()[0]
+        if lv in LEVELS:
+            st['level'] = lv
+    except (OSError, IndexError):
+        pass
+    if st['mode'] != 'auto':
+        st['level'] = st['mode']
+    return st
+
+
+def service_active():
+    return subprocess.run(['systemctl', 'is-active', '--quiet', 's9-dex-fan.service']).returncode == 0
+
+
+def icon_name(st):
+    return 's9-dex-fan-%s%s' % (st['level'], '-auto' if st['mode'] == 'auto' else '')
+
+
+def label(st, svc):
+    t = 'n/d' if st['temp'] is None else '%.0f °C' % st['temp']
+    lv = st['level'].capitalize()
+    s = 'DeX fan — %s — %s%s' % (t, 'Auto: ' if st['mode'] == 'auto' else '', lv)
+    return s if svc else s + ' (service stopped)'
+
+
+# ---------- interface ----------
+def main():
+    lockdir = os.environ.get('XDG_RUNTIME_DIR', '/tmp')
+    lock = open(os.path.join(lockdir, 's9-dex-fan-tray.lock'), 'w')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print('ja esta em execucao'); return 0
+
+    import gi
+    gi.require_version('Gtk', '3.0')
+    from gi.repository import Gtk, GLib, Gio
+
+    ind = None
+    for ns in ('AyatanaAppIndicator3', 'AppIndicator3'):
+        try:
+            gi.require_version(ns, '0.1')
+            ind = importlib.import_module('gi.repository.' + ns)
+            backend = ns
+            break
+        except (ValueError, ImportError):
+            continue
+    if ind is None:
+        backend = 'Gtk.StatusIcon (fallback XEmbed)'
+
+    try:
+        make_icons()
+    except OSError:
+        pass
+    selftest = '--selftest' in sys.argv
+
+    def watcher_up():
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            for name in ('org.kde.StatusNotifierWatcher', 'org.ayatana.StatusNotifierWatcher'):
+                r = bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+                                  'NameHasOwner', GLib.Variant('(s)', (name,)), GLib.VariantType('(b)'),
+                                  Gio.DBusCallFlags.NONE, 2000, None)
+                if r.unpack()[0]:
+                    return True
+        except GLib.Error:
+            pass
+        return False
+
+    class Tray:
+        def __init__(self):
+            self.busy = False
+            self.svc = service_active()
+            self.tick = 0
+            self.items = {}
+            self.samples = []
+            self.shown_temp = None
+            self.shown_at = 0.0
+            self.shown_text = None
+            self.menu = Gtk.Menu()
+            self.hdr = Gtk.MenuItem(label='DeX fan')
+            self.hdr.set_sensitive(False)
+            self.menu.append(self.hdr)
+            self.menu.append(Gtk.SeparatorMenuItem())
+            first = None
+            for key, text in MODES:
+                it = Gtk.RadioMenuItem(label=text) if first is None else \
+                    Gtk.RadioMenuItem.new_with_label_from_widget(first, text)
+                first = first or it
+                it.connect('toggled', self.on_toggled, key)
+                self.items[key] = it
+                self.menu.append(it)
+            self.menu.show_all()
+            st = read_state()
+            if ind is not None:
+                self.ind = ind.Indicator.new_with_path('s9-dex-fan', icon_name(st),
+                                                       ind.IndicatorCategory.HARDWARE, ICONS)
+                self.ind.set_title('DeX fan')
+                self.ind.set_menu(self.menu)
+            else:
+                self.si = Gtk.StatusIcon()
+                self.si.set_title('DeX fan')
+                self.si.connect('popup-menu', lambda i, b, t: self.menu.popup(None, None, Gtk.StatusIcon.position_menu, i, b, t))
+                self.si.connect('activate', lambda i: self.menu.popup(None, None, Gtk.StatusIcon.position_menu, i, 1, Gtk.get_current_event_time()))
+            self.last_icon = None
+            self.refresh()
+            GLib.timeout_add_seconds(POLL_S, self.refresh)
+
+        def refresh(self):
+            st = read_state()
+            self.tick += 1
+            now = time.time()
+            if st['temp'] is not None:
+                self.samples.append(st['temp'])
+            if self.shown_at == 0.0 or now - self.shown_at >= DISPLAY_S:
+                if self.samples:
+                    self.shown_temp = sum(self.samples) / len(self.samples)
+                self.samples = []
+                self.shown_at = now
+            text = label(dict(st, temp=self.shown_temp), self.svc)
+            if self.tick % 5 == 0:
+                self.svc = service_active()
+            name = icon_name(st)
+            self.busy = True
+            try:
+                self.items[st['mode']].set_active(True)
+            finally:
+                self.busy = False
+            if text != self.shown_text:
+                self.hdr.set_label(text)
+            if ind is not None:
+                if name != self.last_icon:
+                    self.ind.set_icon_full(name, 'DeX fan')
+                self.ind.set_status(ind.IndicatorStatus.ACTIVE if st['dock'] else ind.IndicatorStatus.PASSIVE)
+            else:
+                if name != self.last_icon:
+                    self.si.set_from_file(os.path.join(ICONS, name + '.svg'))
+                if text != self.shown_text:
+                    self.si.set_tooltip_text(text)
+                self.si.set_visible(st['dock'])
+            self.last_icon = name
+            self.shown_text = text
+            return True
+
+        def on_toggled(self, item, key):
+            if self.busy or not item.get_active():
+                return
+            threading.Thread(target=self.apply, args=(key,), daemon=True).start()
+
+        def apply(self, key):
+            cmds = [['sudo', '-n', CLI, key]]
+            if key == 'auto':
+                cmds.append(['sudo', '-n', CLI, 'enable'])   # o automatico depende do servico
+            for c in cmds:
+                try:
+                    r = subprocess.run(c, capture_output=True, text=True, timeout=15)
+                    if r.returncode:
+                        print('falha %s: %s' % (' '.join(c), r.stderr.strip() or r.stdout.strip()), file=sys.stderr)
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    print('falha %s: %s' % (' '.join(c), e), file=sys.stderr)
+            self.svc = service_active()
+            GLib.idle_add(self.refresh)
+
+    if selftest:
+        st = read_state()
+        print('backend: %s' % backend)
+        print('estado: %s' % st)
+        print('icones: %d em %s' % (len(glob.glob(ICONS + '/*.svg')), ICONS))
+        print('watcher SNI: %s' % ('ok' if watcher_up() else 'AUSENTE'))
+        return 0
+
+    keep = []
+
+    def start():
+        if ind is not None and not watcher_up():
+            return True          # espera o painel criar o StatusNotifierWatcher (evita icone XEmbed de reserva)
+        keep.append(Tray())
+        return False
+
+    if start():
+        GLib.timeout_add_seconds(1, start)
+    Gtk.main()
+    return 0
+
+
+if __name__ == '__main__':
+    if '--make-icons' in sys.argv:
+        print('%d icones em %s' % (make_icons(), ICONS)); sys.exit(0)
+    sys.exit(main())

@@ -1,0 +1,25 @@
+#!/usr/bin/python3
+# S9: reaplica o patch "icone do Bluetooth sempre visivel" no StatusIcon.py do blueman.
+# Idempotente. Chamado pelo hook do apt (DPkg::Post-Invoke) depois de cada dpkg.
+import os, sys, tempfile
+F = os.environ.get('S9_BM_FILE', '/usr/lib/python3/dist-packages/blueman/plugins/applet/StatusIcon.py')
+MARK = 'S9_BLUEMAN_TRAY_ALWAYS_VISIBLE_V1'
+OLD = "        if self.parent.Manager.get_adapters() or \\\n"
+NEW = "        # " + MARK + "\n        if True or self.parent.Manager.get_adapters() or \\\n"
+def say(m): print('s9-blueman-patch: ' + m, file=sys.stderr)
+if not os.path.isfile(F): sys.exit(0)
+s = open(F).read()
+if MARK in s: sys.exit(0)                      # ja aplicado
+if s.count(OLD) != 1:
+    say('trecho esperado nao encontrado (%d); patch NAO aplicado (blueman mudou?)' % s.count(OLD)); sys.exit(0)
+new = s.replace(OLD, NEW)
+fd, tmp = tempfile.mkstemp(suffix='.py', dir=os.path.dirname(F)); os.close(fd)
+try:
+    open(tmp, 'w').write(new)
+    compile(new, tmp, 'exec')                   # valida a sintaxe antes de trocar
+    open(F + '.s9-original', 'w').write(s)       # guarda o arquivo do pacote (sem patch)
+    os.chmod(tmp, 0o644); os.replace(tmp, F)
+    say('patch reaplicado em ' + F)
+except Exception as e:
+    say('falhou (%r); arquivo original mantido' % (e,))
+    if os.path.exists(tmp): os.unlink(tmp)

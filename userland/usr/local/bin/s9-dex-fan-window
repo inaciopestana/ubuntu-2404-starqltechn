@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""DeX Station Fan: small control window (Auto / High / Medium / Low / Off).
+
+Opened manually from the Telephony menu. Works even when the dock is not detected
+(it just says so). Controls the service via `sudo -n /usr/local/sbin/s9-dex-fan <mode>`.
+Usage: s9-dex-fan-window [--selftest]
+"""
+import os, sys, glob, subprocess, threading, time
+
+CLI = '/usr/local/sbin/s9-dex-fan'
+IDS = os.environ.get('S9FAN_IDS', '/sys/class/sec/ccic/usbpd_ids')
+PARTNER = os.environ.get('S9FAN_PARTNER', '/sys/class/typec/port0-partner')
+THERM = os.environ.get('S9FAN_THERM', '/sys/class/thermal')
+SDIR = os.environ.get('S9FAN_STATE', '/var/lib/s9-dex-fan')
+LEVELS = ['off', 'low', 'medium', 'high']
+MODES = [('auto', 'Auto'), ('high', 'High'), ('medium', 'Medium'), ('low', 'Low'), ('off', 'Off')]
+POLL_S = 3
+DISPLAY_S = 10
+
+
+def dock_present():
+    try:
+        if 'a020' not in open(IDS).read().lower():
+            return False
+    except OSError:
+        return False
+    return os.path.exists(PARTNER)
+
+
+def read_temp():
+    best = None
+    for z in glob.glob(THERM + '/thermal_zone*'):
+        try:
+            t = open(z + '/type').read().strip()
+            if not (t.endswith('-usr') and (t.startswith('cpu') or t.startswith('gpu'))):
+                continue
+            v = int(open(z + '/temp').read().strip())
+        except (OSError, ValueError):
+            continue
+        v = v / 1000.0 if abs(v) > 1000 else float(v)
+        best = v if best is None or v > best else best
+    return best
+
+
+def read_state():
+    st = {'dock': dock_present(), 'mode': 'auto', 'level': 'low', 'temp': read_temp()}
+    try:
+        m = open(SDIR + '/mode').read().strip()
+        if m == 'auto' or m in LEVELS:
+            st['mode'] = m
+    except OSError:
+        pass
+    try:
+        lv = open(SDIR + '/last').read().split()[0]
+        if lv in LEVELS:
+            st['level'] = lv
+    except (OSError, IndexError):
+        pass
+    if st['mode'] != 'auto':
+        st['level'] = st['mode']
+    return st
+
+
+def service_active():
+    return subprocess.run(['systemctl', 'is-active', '--quiet', 's9-dex-fan.service']).returncode == 0
+
+
+def main():
+    import gi
+    gi.require_version('Gtk', '3.0')
+    from gi.repository import Gtk, GLib
+
+    if '--selftest' in sys.argv:
+        print('gtk display: %s' % ('ok' if Gtk.init_check()[0] else 'UNAVAILABLE'))
+        print('state: %s' % read_state())
+        print('service active: %s' % service_active())
+        print('cli: %s' % ('ok' if os.access(CLI, os.X_OK) else 'MISSING'))
+        return 0
+
+    class Win(Gtk.ApplicationWindow):
+        def __init__(self, app):
+            Gtk.ApplicationWindow.__init__(self, application=app, title='DeX Station Fan')
+            self.set_icon_name('s9-dex-fan')
+            self.set_default_size(330, -1)
+            self.set_resizable(False)
+            self.set_border_width(16)
+            self.busy = False
+            self.svc = service_active()
+            self.tick = 0
+            self.samples = []
+            self.shown_temp = None
+            self.shown_at = 0.0
+            self.items = {}
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            self.add(box)
+            self.l_dock = Gtk.Label(xalign=0)
+            self.l_temp = Gtk.Label(xalign=0)
+            self.l_level = Gtk.Label(xalign=0)
+            for w in (self.l_dock, self.l_temp, self.l_level):
+                box.pack_start(w, False, False, 0)
+            box.pack_start(Gtk.Separator(), False, False, 4)
+            first = None
+            for key, text in MODES:
+                it = Gtk.RadioButton.new_with_label_from_widget(first, text)
+                first = first or it
+                it.connect('toggled', self.on_toggled, key)
+                self.items[key] = it
+                box.pack_start(it, False, False, 0)
+            self.l_msg = Gtk.Label(xalign=0)
+            self.l_msg.set_line_wrap(True)
+            box.pack_start(self.l_msg, False, False, 2)
+            self.refresh()
+            self.timer = GLib.timeout_add_seconds(POLL_S, self.refresh)
+
+        def refresh(self):
+            st = read_state()
+            self.tick += 1
+            now = time.time()
+            if st['temp'] is not None:
+                self.samples.append(st['temp'])
+            if self.shown_at == 0.0 or now - self.shown_at >= DISPLAY_S:
+                if self.samples:
+                    self.shown_temp = sum(self.samples) / len(self.samples)
+                self.samples = []
+                self.shown_at = now
+            if self.tick % 5 == 0:
+                self.svc = service_active()
+            self.l_dock.set_text('Dock: %s' % ('detected' if st['dock'] else 'not detected'))
+            self.l_temp.set_text('Temperature: %s' % ('n/a' if self.shown_temp is None else '%.0f °C' % self.shown_temp))
+            lv = st['level'].capitalize()
+            self.l_level.set_text('Fan: %s%s%s' % ('Auto — ' if st['mode'] == 'auto' else '', lv,
+                                                   '' if self.svc else '  (service stopped)'))
+            self.busy = True
+            try:
+                self.items[st['mode']].set_active(True)
+            finally:
+                self.busy = False
+            return True
+
+        def on_toggled(self, item, key):
+            if self.busy or not item.get_active():
+                return
+            self.l_msg.set_text('')
+            threading.Thread(target=self.apply, args=(key,), daemon=True).start()
+
+        def apply(self, key):
+            cmds = [['sudo', '-n', CLI, key]]
+            if key == 'auto':
+                cmds.append(['sudo', '-n', CLI, 'enable'])
+            err = ''
+            for c in cmds:
+                try:
+                    r = subprocess.run(c, capture_output=True, text=True, timeout=15)
+                    if r.returncode:
+                        err = (r.stderr.strip() or r.stdout.strip() or 'failed')[:160]
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    err = str(e)[:160]
+            self.svc = service_active()
+            GLib.idle_add(self.done, err)
+
+        def done(self, err):
+            self.l_msg.set_text(('Error: ' + err) if err else '')
+            self.refresh()
+            return False
+
+    class App(Gtk.Application):
+        def __init__(self):
+            Gtk.Application.__init__(self, application_id='br.s9.DexFan')
+
+        def do_activate(self):
+            w = self.props.active_window or Win(self)
+            w.show_all()
+            w.present()
+
+    return App().run([sys.argv[0]])
+
+
+if __name__ == '__main__':
+    sys.exit(main())

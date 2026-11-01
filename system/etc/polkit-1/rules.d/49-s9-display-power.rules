@@ -1,0 +1,11 @@
+polkit.addRule(function(action, subject) {
+    if (
+        action.id === "org.s9.display-power" &&
+        subject.user === "@S9_USER@" &&
+        action.lookup("program") ===
+            "/usr/local/sbin/s9-internal-display-power" &&
+        action.lookup("user") === "root"
+    ) {
+        return polkit.Result.YES;
+    }
+});

@@ -1,0 +1,14 @@
+[Unit]
+Description=S9 screen cast to a Miracast display (Wi-Fi Direct)
+After=s9-miral-nested.service NetworkManager.service wpa_supplicant.service
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /usr/local/lib/s9-cast/s9-miracast.py run
+ExecStopPost=-/usr/bin/python3 /usr/local/lib/s9-cast/s9-miracast.py cleanup
+Restart=no
+Nice=5
+CPUAccounting=yes
+KillMode=control-group
+TimeoutStopSec=30

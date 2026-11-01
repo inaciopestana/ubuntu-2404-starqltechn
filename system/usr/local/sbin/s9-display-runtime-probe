@@ -1,0 +1,77 @@
+#!/bin/sh
+
+LOG="$HOME/.s9-display-runtime-probe.log"
+
+capture()
+{
+    echo
+    echo "============================================================"
+    echo "S9 DISPLAY RUNTIME PROBE"
+    date
+    echo "sample=$1"
+    echo "uid=$(id -u)"
+    echo "DISPLAY=${DISPLAY:-<vazio>}"
+    echo "============================================================"
+
+    echo
+    echo "===== XRANDR ====="
+    xrandr --query 2>&1 || true
+
+    echo
+    echo "===== MONITORS ====="
+    xrandr --listmonitors 2>&1 || true
+
+    echo
+    echo "===== XDPYINFO ====="
+    xdpyinfo 2>&1 |
+        grep -E 'dimensions:|resolution:' || true
+
+    echo
+    echo "===== ROOT WINDOW ====="
+
+    if command -v xwininfo >/dev/null 2>&1; then
+        xwininfo -root 2>&1 |
+            grep -E 'Width:|Height:|-geometry' || true
+    fi
+
+    echo
+    echo "===== XFCE DISPLAY ====="
+    xfconf-query -c displays -lv 2>&1 || true
+
+    echo
+    echo "===== MIR CONFIG ====="
+    cat /etc/s9-miral.display 2>&1 || true
+
+    echo
+    echo "===== MIROUT MIRAL ====="
+    MIR_SOCKET=/run/s9-miral/mir_socket \
+        mirout 2>&1 || true
+
+    echo
+    echo "===== MIROUT LSC ====="
+    MIR_SOCKET=/run/mir_socket \
+        mirout 2>&1 || true
+
+    echo
+    echo "===== PROCESSES ====="
+    ps -ef |
+        grep -E \
+        'lomiri-system-compositor|s9-miral-shell|Xwayland|xfdesktop|xfce4-panel|s9-display-watch' |
+        grep -v grep || true
+}
+
+: > "$LOG"
+
+capture 0 >>"$LOG" 2>&1
+
+sleep 3
+capture 3 >>"$LOG" 2>&1
+
+sleep 5
+capture 8 >>"$LOG" 2>&1
+
+sleep 7
+capture 15 >>"$LOG" 2>&1
+
+echo >>"$LOG"
+echo "===== PROBE COMPLETE =====" >>"$LOG"

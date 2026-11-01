@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""s9-phoned: chamadas e SMS via ofono (roda como root). Socket /run/s9-phone.sock, um JSON por linha."""
+import os, sys, json, time, socket, subprocess, uuid, re
+import dbus, dbus.mainloop.glib
+from gi.repository import GLib
+
+USER = '@S9_USER@'; UID=@S9_UID@
+SOCK = '/run/s9-phone.sock'
+DATA = '/var/lib/s9-phone'
+SMS = DATA + '/sms.jsonl'; CALLS = DATA + '/calls.jsonl'
+CARD = 'droid_card.primary'
+OFONO = 'org.ofono'
+os.makedirs(DATA, exist_ok=True); os.chown(DATA, UID, UID); os.chmod(DATA, 0o700)
+
+def log(*a): print('s9-phoned:', *a, flush=True)
+
+dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+bus = dbus.SystemBus()
+clients = {}   # fd -> [conn, buffer]
+calls = {}     # caminho -> dados
+msgmap = {}    # caminho da mensagem -> id
+state = {'profile': None}
+
+def iface(path, name):
+    return dbus.Interface(bus.get_object(OFONO, path), name)
+
+def modem():
+    for p, props in iface('/', 'org.ofono.Manager').GetModems():
+        if props.get('Online'):
+            return str(p)
+    raise RuntimeError('modem offline (ofono parado ou modem desligado)')
+
+def append(path, rec):
+    with open(path, 'a') as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+    os.chown(path, UID, UID); os.chmod(path, 0o600)
+
+def read(path):
+    try:
+        return [json.loads(l) for l in open(path) if l.strip()]
+    except FileNotFoundError:
+        return []
+
+def sms_fold():
+    out = {}
+    for r in read(SMS):
+        if 'upd' in r:
+            if r['upd'] in out: out[r['upd']]['state'] = r['state']
+        else:
+            out[r['id']] = r
+    return list(out.values())
+
+def drop(fd):
+    c = clients.pop(fd, None)
+    if c:
+        try: c[0].close()
+        except OSError: pass
+
+def emit(ev):
+    data = (json.dumps(ev, ensure_ascii=False) + '\n').encode()
+    for fd, (conn, _) in list(clients.items()):
+        try: conn.sendall(data)
+        except OSError: drop(fd)
+
+def user_env():
+    try:
+        pid = subprocess.run(['pgrep', '-u', USER, '-x', 'xfce4-panel'], capture_output=True, text=True).stdout.split()[0]
+        env = dict(l.split('=', 1) for l in open('/proc/%s/environ' % pid).read().split('\0') if '=' in l)
+        return {k: env[k] for k in ('DBUS_SESSION_BUS_ADDRESS', 'DISPLAY', 'XAUTHORITY') if k in env}
+    except Exception:
+        return None
+
+def notify(title, body):
+    env = user_env()
+    if not env: return
+    cmd = ['runuser', '-u', USER, '--', 'env', 'XDG_RUNTIME_DIR=/run/user/%d' % UID] + \
+          ['%s=%s' % kv for kv in env.items()] + ['notify-send', '-a', 'Telefone', '-i', 'phone', title, body]
+    try: subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e: log('notify falhou', e)
+
+def pactl(*a):
+    return subprocess.run(['runuser', '-u', USER, '--', 'env', 'XDG_RUNTIME_DIR=/run/user/%d' % UID, 'pactl', *a],
+                          capture_output=True, text=True, timeout=20)
+
+def audio_enabled():
+    try:
+        return 'audio=off' not in open('/etc/s9-phone.conf').read().replace(' ', '')
+    except FileNotFoundError:
+        return True
+
+def restore_port_cb():
+    """O modulo droid estaciona a porta de saida ao entrar em chamada e nao devolve ao sair."""
+    try:
+        if any(c['state'] in ('active', 'held', 'dialing', 'alerting') for c in calls.values()):
+            return False
+        sinks = json.loads(pactl('--format=json', 'list', 'sinks').stdout)
+        sk = next((x for x in sinks if 'PRIMARY' in str(x.get('properties', {}).get('droid.flags', ''))), None)
+        if not sk: return False
+        act = sk.get('active_port') or ''
+        if isinstance(act, dict): act = act.get('name', '')
+        if act and 'parking' not in act and 'earpiece' not in act: return False
+        cands = [q for q in sk.get('ports', []) if not any(w in q['name'] for w in ('parking', 'earpiece'))
+                 and q.get('availability') != 'not available']
+        if not cands: return False
+        best = max(cands, key=lambda q: q.get('priority', 0))
+        r = pactl('set-sink-port', sk['name'], best['name'])
+        log('porta de saida restaurada ->', best['name'], 'rc', r.returncode)
+    except Exception as e:
+        log('restaurar porta falhou:', e)
+    return False
+
+def update_audio():
+    if not audio_enabled(): return
+    live = any(c['state'] in ('active', 'held', 'dialing', 'alerting') for c in calls.values())
+    want = 'voicecall' if live else 'default'
+    if want == 'default' and state['profile'] != 'voicecall': return
+    if state['profile'] == want: return
+    r = pactl('set-card-profile', CARD, want)
+    log('perfil de audio ->', want, 'rc', r.returncode, (r.stderr or '').strip()[:120])
+    state['profile'] = want
+    if want == 'default': GLib.timeout_add(1500, restore_port_cb)
+
+def call_info(path):
+    c = calls[path]
+    return {'path': path, 'number': c['number'], 'state': c['state'], 'incoming': c['incoming'], 'since': c['start']}
+
+def on_call_added(path, props):
+    path = str(path); st = str(props.get('State', ''))
+    calls[path] = {'number': str(props.get('LineIdentification', '')), 'state': st,
+                   'incoming': st in ('incoming', 'waiting'), 't0': time.time(), 'start': None}
+    log('chamada', path, st, calls[path]['number'])
+    if calls[path]['incoming']:
+        notify('Incoming call', calls[path]['number'] or 'hidden number')
+    emit(dict(event='call', **call_info(path)))
+    update_audio()
+
+def on_call_removed(path):
+    path = str(path); c = calls.pop(path, None)
+    if not c: return
+    dur = int(time.time() - c['start']) if c['start'] else 0
+    res = ('perdida' if c['incoming'] and not c['start'] else 'atendida' if c['incoming']
+           else 'completada' if c['start'] else 'nao_atendida')
+    rec = {'ts': c['t0'], 'number': c['number'], 'incoming': c['incoming'], 'result': res, 'duration': dur}
+    append(CALLS, rec)
+    log('chamada encerrada', res, dur, 's')
+    if res == 'perdida': notify('Missed call', c['number'] or 'hidden number')
+    emit(dict(event='call_end', **rec))
+    update_audio()
+
+def on_call_prop(name, value, path=None):
+    path = str(path); c = calls.get(path)
+    if not c: return
+    if name == 'State':
+        c['state'] = str(value)
+        if c['state'] == 'active' and not c['start']: c['start'] = time.time()
+        if c['state'] in ('incoming', 'waiting'): c['incoming'] = True
+        log('chamada', path, '->', c['state'])
+        emit(dict(event='call', **call_info(path)))
+        update_audio()
+    elif name == 'LineIdentification':
+        c['number'] = str(value)
+
+def on_incoming(message, info):
+    rec = {'id': uuid.uuid4().hex, 'ts': time.time(), 'dir': 'in', 'number': str(info.get('Sender', '?')),
+           'text': str(message), 'state': 'received'}
+    append(SMS, rec)
+    log('SMS recebido de', rec['number'])
+    notify('SMS from ' + rec['number'], rec['text'])
+    emit(dict(event='sms_in', **rec))
+
+def on_msg_prop(name, value, path=None):
+    mid = msgmap.get(str(path))
+    if name != 'State' or not mid: return
+    append(SMS, {'upd': mid, 'state': str(value)})
+    emit({'event': 'sms_state', 'id': mid, 'state': str(value)})
+    if str(value) == 'failed': notify('SMS not sent', 'sending failed')
+
+bus.add_signal_receiver(on_call_added, 'CallAdded', 'org.ofono.VoiceCallManager')
+bus.add_signal_receiver(on_call_removed, 'CallRemoved', 'org.ofono.VoiceCallManager')
+bus.add_signal_receiver(on_call_prop, 'PropertyChanged', 'org.ofono.VoiceCall', path_keyword='path')
+bus.add_signal_receiver(on_incoming, 'IncomingMessage', 'org.ofono.MessageManager')
+bus.add_signal_receiver(on_incoming, 'ImmediateMessage', 'org.ofono.MessageManager')
+bus.add_signal_receiver(on_msg_prop, 'PropertyChanged', 'org.ofono.Message', path_keyword='path')
+
+def first_call(want_incoming=None):
+    for p, c in calls.items():
+        if want_incoming is None or c['incoming'] == want_incoming and c['state'] in ('incoming', 'waiting'):
+            return p
+    raise RuntimeError('nenhuma chamada')
+
+def handle(req):
+    cmd = req.get('cmd')
+    if cmd == 'status':
+        try: modem(); online = True
+        except Exception: online = False
+        return {'online': online, 'calls': [call_info(p) for p in calls], 'profile': state['profile']}
+    if cmd == 'dial':
+        n = str(req.get('number', '')).strip()
+        if not re.fullmatch(r'[0-9+*#]{2,20}', n): raise ValueError('numero invalido')
+        return {'path': str(iface(modem(), 'org.ofono.VoiceCallManager').Dial(n, ''))}
+    if cmd == 'answer':
+        p = req.get('path') or first_call(True)
+        iface(p, 'org.ofono.VoiceCall').Answer(); return {}
+    if cmd == 'hangup':
+        if req.get('path'): iface(req['path'], 'org.ofono.VoiceCall').Hangup()
+        else: iface(modem(), 'org.ofono.VoiceCallManager').HangupAll()
+        return {}
+    if cmd == 'dtmf':
+        d = str(req.get('digits', ''))
+        if not re.fullmatch(r'[0-9*#]{1,32}', d): raise ValueError('digitos invalidos')
+        iface(modem(), 'org.ofono.VoiceCallManager').SendTones(d); return {}
+    if cmd == 'mute':
+        iface(modem(), 'org.ofono.CallVolume').SetProperty('Muted', dbus.Boolean(bool(req.get('on')))); return {}
+    if cmd == 'sms_send':
+        n = str(req.get('number', '')).strip(); t = str(req.get('text', ''))
+        if not re.fullmatch(r'\+?[0-9]{3,20}', n): raise ValueError('numero invalido')
+        if not t or len(t) > 1000: raise ValueError('texto vazio ou longo demais')
+        path = str(iface(modem(), 'org.ofono.MessageManager').SendMessage(n, t))
+        mid = uuid.uuid4().hex; msgmap[path] = mid
+        rec = {'id': mid, 'ts': time.time(), 'dir': 'out', 'number': n, 'text': t, 'state': 'pending'}
+        append(SMS, rec); emit(dict(event='sms_out', **rec))
+        return {'id': mid}
+    if cmd == 'sms_list':
+        n = req.get('number'); msgs = sms_fold()
+        if n: msgs = [m for m in msgs if m['number'].endswith(str(n)[-9:])]
+        return {'messages': msgs[-int(req.get('limit', 100)):]}
+    if cmd == 'calls_list':
+        return {'calls': read(CALLS)[-int(req.get('limit', 100)):]}
+    raise ValueError('comando desconhecido: %s' % cmd)
+
+def readable(fd, cond):
+    c = clients.get(fd)
+    if not c: return False
+    try: data = c[0].recv(65536)
+    except socket.timeout: return True
+    except OSError: data = b''
+    if not data:
+        drop(fd); return False
+    c[1] += data
+    while b'\n' in c[1]:
+        line, c[1] = c[1].split(b'\n', 1)
+        try:
+            req = json.loads(line.decode()); rid = req.get('id')
+            try: resp = dict(handle(req), ok=True)
+            except Exception as e: resp = {'ok': False, 'error': str(e)}
+        except Exception as e:
+            rid = None; resp = {'ok': False, 'error': 'pedido invalido: %s' % e}
+        resp['id'] = rid
+        try: c[0].sendall((json.dumps(resp, ensure_ascii=False) + '\n').encode())
+        except OSError:
+            drop(fd); return False
+    return True
+
+def accept(fd, cond):
+    conn, _ = srv.accept(); conn.settimeout(2)
+    clients[conn.fileno()] = [conn, b'']
+    GLib.io_add_watch(conn.fileno(), GLib.PRIORITY_DEFAULT, GLib.IO_IN | GLib.IO_HUP | GLib.IO_ERR, readable)
+    return True
+
+try: os.unlink(SOCK)
+except FileNotFoundError: pass
+srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+srv.bind(SOCK); os.chown(SOCK, UID, UID); os.chmod(SOCK, 0o600); srv.listen(5)
+GLib.io_add_watch(srv.fileno(), GLib.PRIORITY_DEFAULT, GLib.IO_IN, accept)
+
+try:
+    for p, props in iface(modem(), 'org.ofono.VoiceCallManager').GetCalls():
+        on_call_added(p, props)
+except Exception as e:
+    log('sem modem agora:', e)
+GLib.timeout_add_seconds(8, restore_port_cb)
+log('pronto')
+GLib.MainLoop().run()

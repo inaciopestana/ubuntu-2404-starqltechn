@@ -1,0 +1,9 @@
+#!/bin/sh
+
+#
+# Compatibilidade com chamadas antigas.
+# Toda a política real fica em s9-display-watch.
+#
+
+S9_ONESHOT=1 \
+exec /usr/local/sbin/s9-display-watch

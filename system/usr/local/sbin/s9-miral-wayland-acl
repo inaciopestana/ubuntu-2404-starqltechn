@@ -1,0 +1,108 @@
+#!/bin/bash
+set -e
+
+USER_NAME=@S9_USER@
+RUNTIME=/run/s9-miral
+
+prepare()
+{
+    mkdir -p "$RUNTIME"
+
+    #
+    # Acesso ao diretorio atual.
+    #
+    setfacl \
+        -m "u:${USER_NAME}:rwx" \
+        "$RUNTIME"
+
+    #
+    # ACL DEFAULT:
+    #
+    # Tudo que for criado posteriormente dentro de /run/s9-miral
+    # herdara acesso para @S9_USER@.
+    #
+    setfacl \
+        -m "d:u:${USER_NAME}:rwX" \
+        "$RUNTIME"
+
+    #
+    # Garantir que a mask nao elimine a ACL.
+    #
+    setfacl \
+        -m "m::rwx" \
+        "$RUNTIME"
+
+    setfacl \
+        -m "d:m::rwx" \
+        "$RUNTIME"
+}
+
+
+fix_existing()
+{
+    prepare
+
+    for f in \
+        "$RUNTIME"/wayland-* \
+        "$RUNTIME"/mir_socket
+    do
+
+        [ -e "$f" ] || continue
+
+        setfacl \
+            -m "u:${USER_NAME}:rw" \
+            "$f" \
+            2>/dev/null ||
+        true
+
+    done
+}
+
+
+wait_socket()
+{
+    prepare
+
+    n=0
+
+    while [ "$n" -lt 150 ]; do
+
+        if [ -S "$RUNTIME/wayland-0" ]; then
+
+            fix_existing
+
+            exit 0
+        fi
+
+        n=$((n + 1))
+        sleep 0.1
+    done
+
+    echo \
+        "s9-miral-wayland-acl: wayland-0 nao apareceu" \
+        >&2
+
+    exit 1
+}
+
+
+case "${1:-fix}" in
+
+    prepare)
+        prepare
+        ;;
+
+    wait)
+        wait_socket
+        ;;
+
+    fix)
+        fix_existing
+        ;;
+
+    *)
+        echo "uso: $0 {prepare|wait|fix}" >&2
+        exit 2
+        ;;
+
+esac

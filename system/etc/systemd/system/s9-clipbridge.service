@@ -1,0 +1,19 @@
+[Unit]
+Description=S9 clipboard bridge (Mir <-> X11)
+After=s9-miral-nested.service
+PartOf=s9-miral-nested.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@S9_USER@
+Environment=DISPLAY=:0
+Environment=S9_CLIP_SOCKET=/run/s9-miral/clip.sock
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=-+/usr/local/libexec/s9-docklike-x11-access.sh
+ExecStart=/usr/bin/python3 /usr/local/lib/s9-clipbridge/s9-clipbridge.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=s9-miral-nested.service

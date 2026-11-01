@@ -1,0 +1,11 @@
+[Unit]
+Description=Protect the S9 display stack from the Android lowmemorykiller
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/s9-oom-protect
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+[ "$(id -u)" -eq 0 ] || exit 1
+
+case "${1:-}" in
+    --check)
+        echo "AUTORIZACAO_OK"
+        ;;
+    poweroff)
+        echo "Sincronizando armazenamento..."
+        /usr/bin/sync
+        exec /usr/bin/systemctl poweroff
+        ;;
+    reboot)
+        echo "Sincronizando armazenamento..."
+        /usr/bin/sync
+        exec /usr/bin/systemctl reboot
+        ;;
+    *)
+        exit 2
+        ;;
+esac

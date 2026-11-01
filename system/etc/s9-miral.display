@@ -1,0 +1,14 @@
+layouts:
+  default:
+    cards:
+    - card-id: 0
+
+      LVDS-1:
+        state: enabled
+        orientation: right
+
+        mode: 1440x2960@60.0
+      DisplayPort-1:
+        state: enabled
+        orientation: normal
+        mode: 3840x1080@120.0

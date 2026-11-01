@@ -1,0 +1,33 @@
+# systemd units the installer enables (one per line). Units without an [Install]
+# section are started by others and are not listed.
+s9-blueman-applet.service
+s9-clipbridge.service
+s9-clock-guard.service
+s9-clock-keep.service
+s9-clock-save.timer
+s9-dex-fan-tray.service
+s9-dex-fan.service
+s9-display-crash-probe.service
+s9-docklike-ewmh.service
+s9-dp-audio.service
+s9-governor.service
+s9-gpu-permissions.service
+s9-halium-bootlog.service
+s9-lastkmsg-save.service
+s9-lmk-tune.service
+s9-lsc.service
+s9-miracast-prep.service
+s9-miral-nested.service
+s9-nm-applet.service
+s9-oom-protect.service
+s9-panel-popup-anchor.service
+s9-panel.service
+s9-perf.timer
+s9-phoned.service
+s9-physical-power-button.service
+s9-physical-volume.service
+s9-pre-shutdown.service
+s9-swap.service
+s9-ubports-audio-hidl.service
+s9-usb-rndis.service
+s9-xwayland-gralloc-mount.service

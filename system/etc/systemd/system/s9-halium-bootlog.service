@@ -1,0 +1,10 @@
+[Unit]
+Description=Capture Galaxy S9 Halium first boot diagnostics
+After=lxc-android-config.service s9-gpu-permissions.service s9-lsc.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/s9-halium-bootlog
+
+[Install]
+WantedBy=graphical.target

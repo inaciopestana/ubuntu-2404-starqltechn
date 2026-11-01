@@ -1,0 +1,211 @@
+#!/bin/bash
+# s9-cast: transmite a tela (o desktop do MirAL aninhado).
+#   SRT (para PC/VLC/ffplay): s9-cast start | cmd          -> MPEG-TS/H.264 criptografado, o celular espera o espectador
+#   TV (Google Cast ou DLNA): s9-cast scan | tv <id>        -> o celular manda a TV abrir o video
+#   Navegador (tablet/PC): s9-cast web | weburl   -> o celular serve uma pagina; abra http://IP:8099/v/TOKEN/ no navegador
+# Wi-Fi Direct / Miracast (TV, tablet com Second Screen): s9-cast wifi-scan | wifi <id> | wifi-avoffset <ms>   (V6)
+# Atraso do som (sincronia com a imagem): s9-cast avoffset <ms>   (positivo = som depois; reinicia a transmissao em curso)
+# Outros: stop | status | quality normal|light | proto gcast|dlna | audio on|off | run (interno, usado pelo systemd)
+SOCK=${S9_CAST_SOCK:-/run/s9-miral/mir_socket}
+STATE=${S9_CAST_STATE:-/var/lib/s9-cast}
+RUN=${S9_CAST_RUN:-/run/s9-cast}
+PORT=${S9_CAST_PORT:-5000}
+TVPY=${S9_CAST_TVPY:-/usr/local/lib/s9-cast/s9-cast-tv.py}
+AUDIO=${S9_CAST_AUDIO:-/usr/local/sbin/s9-cast-audio}
+HTTP_PORT=${S9_CAST_HTTP_PORT:-8099}
+UNIT=s9-cast.service
+TVUNIT=s9-cast-tv.service
+MIRAUNIT=s9-miracast.service
+MIRAPY=${S9_CAST_MIRAPY:-/usr/local/lib/s9-cast/s9-miracast.py}
+mkdir -p "$STATE" "$RUN"
+log() { echo "s9-cast: $*" >&2; }
+
+get_quality() { local q; q=$(cat "$STATE/quality" 2>/dev/null); case "$q" in light) echo light;; *) echo normal;; esac; }
+get_proto() { local q; q=$(cat "$STATE/proto" 2>/dev/null); case "$q" in dlna) echo dlna;; *) echo gcast;; esac; }
+profile() {   # limites do video enviado por SRT (a tela e reduzida para caber, nunca ampliada)
+  case "$(get_quality)" in
+    light) MAXW=1280; MAXH=720;  BR=2M; BUF=1M;;
+    *)     MAXW=1920; MAXH=1080; BR=4M; BUF=2M;;
+  esac
+}
+get_avoff() { local v; v=$(cat "$STATE/av_offset" 2>/dev/null); [[ "$v" =~ ^-?[0-9]{1,4}$ ]] || v=0; echo "$v"; }
+get_pass() {
+  local f=$STATE/pass
+  [ -s "$f" ] || ( umask 077; head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | cut -c1-24 > "$f" )
+  cat "$f"
+}
+myip() { ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'; }
+unit_active() { [ -n "$S9_CAST_ACTIVE" ] && return 0; systemctl is-active --quiet "$UNIT"; }
+tv_active() { [ -n "$S9_CAST_TV_ACTIVE" ] && return 0; systemctl is-active --quiet "$TVUNIT"; }
+mira_active() { [ -n "$S9_CAST_MIRA_ACTIVE" ] && return 0; systemctl is-active --quiet "$MIRAUNIT"; }
+
+kv() { grep -a "^$1=" "$2" 2>/dev/null | tail -1 | cut -d= -f2-; }
+
+web_token() {
+  local f=$STATE/webtoken
+  [[ "$(cat "$f" 2>/dev/null)" =~ ^[0-9a-f]{8}$ ]] || ( umask 077; head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$f" )
+  cat "$f"
+}
+web_url() { echo "http://$(myip):$HTTP_PORT/v/$(web_token)/"; }
+
+progress_fresh() {   # so ha blocos "progress=continue" no arquivo enquanto ha espectador conectado (vazio = esperando)
+  local f=$RUN/progress age
+  [ -s "$f" ] || return 1
+  [ "$(grep -a '^progress=' "$f" | tail -1)" = "progress=continue" ] || return 1
+  age=$(( $(date +%s) - $(stat -c %Y "$f") ))
+  [ "$age" -ge -5 ] && [ "$age" -le 6 ]
+}
+
+do_status() {
+  local state=off mode= fps= br= tgt= tid= tproto= err= age wurl= nclients= st step= res= f
+  if mira_active; then
+    mode=wifi; state=connecting
+    if [ -s "$RUN/mira.status" ]; then
+      st=$(kv state "$RUN/mira.status")
+      case "$st" in streaming|connecting) state=$st;; esac
+      tgt=$(kv target "$RUN/mira.status"); tid=$(kv target_id "$RUN/mira.status"); step=$(kv step "$RUN/mira.status"); res=$(kv res "$RUN/mira.status")
+    fi
+  elif tv_active; then
+    mode=tv; state=connecting
+    if [ -s "$RUN/tv.status" ]; then
+      st=$(kv state "$RUN/tv.status")
+      case "$st" in streaming|waiting) state=$st;; esac
+      tgt=$(kv target "$RUN/tv.status"); tid=$(kv target_id "$RUN/tv.status"); tproto=$(kv proto "$RUN/tv.status")
+      if [ "$tproto" = web ]; then mode=web; wurl=$(web_url); nclients=$(kv clients "$RUN/tv.status"); fi
+    fi
+  elif unit_active; then
+    mode=srt; state=waiting
+    if progress_fresh; then
+      state=streaming
+      fps=$(grep -a '^fps=' "$RUN/progress" | tail -1 | cut -d= -f2)
+      br=$(grep -a '^bitrate=' "$RUN/progress" | tail -1 | cut -d= -f2)
+    fi
+  else
+    for f in "$RUN/tv.error" "$RUN/mira.error"; do
+      [ -s "$f" ] || continue
+      age=$(( $(date +%s) - $(stat -c %Y "$f") ))
+      if [ "$age" -ge -5 ] && [ "$age" -le 120 ]; then err=$(head -1 "$f" | tr -d '\r' | cut -c1-120); fi
+    done
+  fi
+  echo "state=$state"
+  echo "mode=$mode"
+  echo "quality=$(get_quality)"
+  echo "pref=$(get_proto)"
+  echo "audio=$([ "$(cat "$STATE/audio" 2>/dev/null)" = off ] && echo off || echo on)"
+  echo "av_offset=$(get_avoff)"
+  echo "ip=$(myip)"
+  echo "port=$PORT"
+  [ -n "$tgt" ] && echo "target=$tgt"
+  [ -n "$tid" ] && echo "target_id=$tid"
+  [ -n "$tproto" ] && echo "proto=$tproto"
+  [ -n "$wurl" ] && echo "weburl=$wurl"
+  [ -n "$nclients" ] && echo "clients=$nclients"
+  [ -n "$step" ] && echo "step=$step"
+  [ -n "$res" ] && echo "res=$res"
+  [ -n "$fps" ] && echo "fps=$fps"
+  [ -n "$br" ] && echo "bitrate=$br"
+  [ -n "$err" ] && echo "lasterr=$err"
+  return 0
+}
+
+probe() {   # tamanho, taxa de atualizacao e formato da tela, pelo --query do mirscreencast
+  local o size
+  o=$(timeout 15 mirscreencast -m "$SOCK" --query 2>/dev/null) || return 1
+  FMT=$(printf '%s\n' "$o" | sed -n 's/^Colorspace: *//p' | head -1 | tr 'A-Z' 'a-z')
+  size=$(printf '%s\n' "$o" | sed -n 's/^Output size: *//p' | head -1)
+  HZ=$(printf '%s\n' "$o" | sed -n 's/^Capture rate (Hz): *//p' | head -1 | cut -d. -f1)
+  W=${size%x*}; H=${size#*x}
+  [[ "$FMT" =~ ^(rgba|bgra)$ ]] && [[ "$W" =~ ^[0-9]+$ ]] && [[ "$H" =~ ^[0-9]+$ ]] && [[ "$HZ" =~ ^[0-9]+$ ]] || return 1
+  INT=$(( (HZ + 15) / 30 )); [ "$INT" -ge 1 ] || INT=1
+  return 0
+}
+
+do_run() {
+  local pass apid rc aoff
+  pass=$(get_pass)
+  while :; do
+    profile
+    rm -f "$RUN/progress"
+    if ! probe; then log "nao consegui consultar a tela (mirscreencast --query); tentando de novo em 5 s"; sleep 5; continue; fi
+    AIN=(); AMAP=(-map 0:v:0); apid=
+    if [ "$(cat "$STATE/audio" 2>/dev/null)" != off ] && "$AUDIO" check >/dev/null 2>&1; then
+      rm -f "$RUN/audio.pcm"; mkfifo "$RUN/audio.pcm"
+      "$AUDIO" > "$RUN/audio.pcm" 2>/dev/null &
+      apid=$!
+      AIN=(-thread_queue_size 1024 -f s16le -ar 48000 -ac 2 -use_wallclock_as_timestamps 1)
+      aoff=$(get_avoff); [ "$aoff" -lt 0 ] && AIN+=(-itsoffset "$(awk -v v="$aoff" 'BEGIN{printf "%.3f", v/1000}')")
+      AIN+=(-i "$RUN/audio.pcm")
+      AMAP=(-map 0:v:0 -map 1:a:0 -c:a aac -b:a 128k -ar 48000 -ac 2 -af "aresample=async=1000$([ "$aoff" -gt 0 ] && echo ",adelay=${aoff}|${aoff}")")
+    fi
+    log "tela ${W}x${H} @ ${HZ} Hz ($FMT), captura 1 a cada $INT quadros, qualidade $(get_quality), audio $([ -n "$apid" ] && echo sim || echo nao), esperando espectador na porta $PORT"
+    mirscreencast -m "$SOCK" --cap-interval "$INT" --stdout 2>/dev/null \
+      | ffmpeg -nostdin -hide_banner -loglevel warning -thread_queue_size 512 -use_wallclock_as_timestamps 1 -f rawvideo -pix_fmt "$FMT" -video_size "${W}x${H}" -i - "${AIN[@]}" \
+          -vf "fps=30,scale=w='min(iw,$MAXW)':h='min(ih,$MAXH)':force_original_aspect_ratio=decrease:force_divisible_by=2,format=yuv420p" \
+          "${AMAP[@]}" \
+          -c:v libx264 -preset ultrafast -tune zerolatency -g 60 -bf 0 -b:v "$BR" -maxrate "$BR" -bufsize "$BUF" \
+          -progress "$RUN/progress" -stats_period 2 -flush_packets 1 \
+          -f mpegts "srt://0.0.0.0:$PORT?mode=listener&passphrase=$pass&pbkeylen=16&latency=250000&pkt_size=1316"
+    rc="${PIPESTATUS[*]}"
+    [ -n "$apid" ] && { kill "$apid" 2>/dev/null; wait "$apid" 2>/dev/null; }
+    log "sessao terminou (codigos: $rc); reiniciando em 1 s"
+    sleep 1
+  done
+}
+
+stop_all() {
+  systemctl stop "$UNIT" "$TVUNIT" "$MIRAUNIT" 2>/dev/null
+  rm -f "$RUN/progress" "$RUN/tv.status" "$RUN/mira.status"
+}
+
+case "${1:-status}" in
+  run)     do_run;;
+  status)  do_status;;
+  cmd)     echo "ffplay -fflags nobuffer -flags low_delay -framedrop -probesize 32 -analyzeduration 0 \"srt://$(myip):$PORT?passphrase=$(get_pass)\"";;
+  start)   tv_active && { systemctl stop "$TVUNIT" 2>/dev/null; rm -f "$RUN/tv.status"; }
+           mira_active && { systemctl stop "$MIRAUNIT" 2>/dev/null; rm -f "$RUN/mira.status"; }
+           unit_active || systemctl start "$UNIT" || { log "falha ao iniciar $UNIT"; exit 1; }
+           sleep 1; unit_active || { log "$UNIT nao ficou ativo"; exit 1; }
+           echo "srt://$(myip):$PORT (esperando espectador)";;
+  stop)    stop_all; echo "parado";;
+  scan)    [ -r "$TVPY" ] || { log "falta $TVPY"; exit 1; }
+           timeout 30 python3 "$TVPY" scan;;
+  tv)      [[ "$2" =~ ^[0-9a-f]{8}$ ]] && [ "$#" -eq 2 ] || { echo "uso: s9-cast tv <id>"; exit 1; }
+           [ -r "$TVPY" ] || { log "falta $TVPY"; exit 1; }
+           systemctl stop "$UNIT" "$TVUNIT" "$MIRAUNIT" 2>/dev/null; rm -f "$RUN/progress" "$RUN/tv.status" "$RUN/tv.error" "$RUN/mira.status"
+           echo "$2" > "$RUN/tv.target"
+           systemctl start "$TVUNIT" || { log "falha ao iniciar $TVUNIT"; exit 1; }
+           echo "tv: conectando ($2)";;
+  web)     [ -r "$TVPY" ] || { log "falta $TVPY"; exit 1; }
+           systemctl stop "$UNIT" "$TVUNIT" "$MIRAUNIT" 2>/dev/null; rm -f "$RUN/progress" "$RUN/tv.status" "$RUN/tv.error" "$RUN/mira.status"
+           echo web > "$RUN/tv.target"
+           systemctl start "$TVUNIT" || { log "falha ao iniciar $TVUNIT"; exit 1; }
+           echo "web: $(web_url)";;
+  weburl)  web_url;;
+  wifi-scan) [ -r "$MIRAPY" ] || { log "falta $MIRAPY"; exit 1; }
+           mira_active && { echo "ocupado: transmitindo"; exit 0; }
+           nmcli device set swlan0 managed no >/dev/null 2>&1; ip link set swlan0 down >/dev/null 2>&1
+           timeout 45 python3 "$MIRAPY" scan;;
+  wifi)    [[ "$2" =~ ^[0-9a-f]{8}$ ]] && [ "$#" -eq 2 ] || { echo "uso: s9-cast wifi <id>"; exit 1; }
+           [ -r "$MIRAPY" ] || { log "falta $MIRAPY"; exit 1; }
+           systemctl stop "$UNIT" "$TVUNIT" "$MIRAUNIT" 2>/dev/null; rm -f "$RUN/progress" "$RUN/tv.status" "$RUN/tv.error" "$RUN/mira.status" "$RUN/mira.error"
+           echo "$2" > "$RUN/mira.target"
+           systemctl start "$MIRAUNIT" || { log "falha ao iniciar $MIRAUNIT"; exit 1; }
+           echo "wifi: connecting to $(python3 "$MIRAPY" name "$2" 2>/dev/null) - accept the request on the display's screen";;
+  wifi-avoffset) if [ "$#" -eq 2 ] && [[ "$2" =~ ^-?[0-9]{1,4}$ ]] && [ "$2" -ge -1000 ] && [ "$2" -le 3000 ]; then
+              echo "$2" > "$STATE/mira_av_offset"; echo "atraso do som no Wi-Fi Direct: $2 ms (vale na proxima conexao)"
+            else echo "uso: s9-cast wifi-avoffset <ms de -1000 a 3000>"; exit 1; fi;;
+  avoffset) if [ "$#" -eq 2 ] && [[ "$2" =~ ^-?[0-9]{1,4}$ ]] && [ "$2" -ge -1000 ] && [ "$2" -le 3000 ]; then
+              echo "$2" > "$STATE/av_offset"
+              if tv_active; then [ -z "$S9_CAST_TV_ACTIVE" ] && systemctl restart "$TVUNIT" 2>/dev/null
+              elif unit_active; then [ -z "$S9_CAST_ACTIVE" ] && systemctl restart "$UNIT" 2>/dev/null; fi
+              echo "atraso do som: $2 ms"
+            else echo "uso: s9-cast avoffset <ms de -1000 a 3000>   (positivo = atrasa o som)"; exit 1; fi;;
+  audio)   case "$2" in on|off) echo "$2" > "$STATE/audio"; echo "audio na transmissao: $2";;
+                        *) echo "uso: s9-cast audio on|off"; exit 1;; esac;;
+  proto)   case "$2" in gcast|dlna) echo "$2" > "$STATE/proto"; echo "protocolo da TV: $2";;
+                        *) echo "uso: s9-cast proto gcast|dlna"; exit 1;; esac;;
+  quality) case "$2" in normal|light) echo "$2" > "$STATE/quality"; unit_active && [ -z "$S9_CAST_ACTIVE" ] && systemctl restart "$UNIT"; echo "qualidade: $2";;
+                        *) echo "uso: s9-cast quality normal|light"; exit 1;; esac;;
+  *) echo "uso: s9-cast start|stop|status|cmd|scan|tv <id>|web|weburl|avoffset <ms>|proto gcast|dlna|audio on|off|quality normal|light|wifi-scan|wifi <id>|wifi-avoffset <ms>"; exit 1;;
+esac
+exit 0

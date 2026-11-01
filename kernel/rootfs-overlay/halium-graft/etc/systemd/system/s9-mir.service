@@ -1,0 +1,17 @@
+[Unit]
+Description=Galaxy S9 Mir compositor over Halium/libhybris
+Requires=s9-halium-preflight.service
+After=s9-halium-preflight.service
+Conflicts=display-manager.service
+
+[Service]
+Type=simple
+User=@S9_USER@
+PAMName=login
+Environment=HOME=@S9_HOME@
+ExecStart=/usr/local/sbin/s9-start-mir
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical.target

@@ -1,0 +1,18 @@
+#!/bin/sh
+
+{
+    echo
+    echo "===== S9 STAGE2 WRAPPER ====="
+    date 2>/dev/null || true
+    echo "PID=$$"
+    echo "uname:"
+    uname -a
+    echo "root:"
+    mount | grep ' on / '
+    echo "/sbin/init:"
+    ls -l /sbin/init
+    echo "============================="
+    sync
+} >> /boot-stage.log 2>&1
+
+exec /sbin/init

@@ -1,0 +1,13 @@
+[Unit]
+Description=S9 Wi-Fi Direct (Miracast): preparo depois do boot
+After=NetworkManager.service wpa_supplicant.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sleep 25
+ExecStart=-/usr/bin/python3 /usr/local/lib/s9-cast/s9-miracast.py prep
+TimeoutStartSec=240
+
+[Install]
+WantedBy=multi-user.target

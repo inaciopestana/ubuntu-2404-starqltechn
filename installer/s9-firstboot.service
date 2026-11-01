@@ -1,0 +1,16 @@
+[Unit]
+Description=Galaxy S9 first-boot setup (asks for user, password, locale)
+ConditionPathExists=!/var/lib/s9-ubports/firstboot.done
+Before=getty@tty1.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/s9-ubports/installer/s9-firstboot --repo /opt/s9-ubports
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target

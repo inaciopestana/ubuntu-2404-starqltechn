@@ -1,0 +1,58 @@
+# --- build products and images ------------------------------------------
+build/
+out/
+*.o
+*.so
+*.so.*
+*.img
+*.img.*
+*.bin
+*.zip
+*.tar
+*.tar.*
+*.tgz
+*.deb
+*.dtb
+Image.gz*
+vbmeta*
+# --- backups and work-in-progress ---------------------------------------
+*.bak
+*.bak.*
+*.before-*
+*.pre-*
+*.WORKING*
+*.orig
+*.rej
+*~
+.staging/
+__pycache__/
+*.pyc
+# --- logs, cores, dumps ---------------------------------------------------
+*.log
+core
+core.*
+*.core
+# --- anything that could hold personal data or secrets --------------------
+*.key
+*.pem
+*.p12
+*.pfx
+*.nmconnection
+*.psk
+.env
+.env.*
+id_rsa*
+id_ed25519*
+*.kdbx
+secrets/
+private/
+/local/
+my-*
+# --- firmware / vendor blobs: NEVER redistribute ---------------------------
+vendor/
+firmware/
+system.img
+vendor.img
+*.mbn
+*.elf
+*.b0?

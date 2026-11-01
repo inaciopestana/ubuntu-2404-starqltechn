@@ -1,0 +1,2 @@
+upstream: https://gitlab.com/ubports/development/core/hybris-support/mir-android2-platform.git
+base commit: 72f96d2f69adcd1856295c36ee55ac03ad2860c5

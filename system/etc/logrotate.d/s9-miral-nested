@@ -1,0 +1,9 @@
+/var/log/s9-miral-nested.log {
+    size 50M
+    rotate 3
+    copytruncate
+    compress
+    delaycompress
+    missingok
+    notifempty
+}

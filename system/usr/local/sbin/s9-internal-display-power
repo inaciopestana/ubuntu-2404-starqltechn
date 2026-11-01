@@ -1,0 +1,206 @@
+#!/usr/bin/python3
+
+import os
+import sys
+import re
+import time
+import fcntl
+import subprocess
+
+DEST = "com.lomiri.SystemCompositor.Display"
+OBJ = "/com/lomiri/SystemCompositor/Display"
+IFACE = "com.lomiri.SystemCompositor.Display"
+
+BACK = "/sys/class/backlight/panel0-backlight"
+SAVED = (
+    "@S9_HOME@/.local/state/"
+    "s9-screen/previous-brightness"
+)
+
+LOCK = "/run/lock/s9-internal-display-power.lock"
+
+
+def call(*args):
+    result = subprocess.run(
+        [
+            "/usr/bin/gdbus",
+            "call",
+            "--system",
+            "--dest", DEST,
+            "--object-path", OBJ,
+            *args
+        ],
+        capture_output=True,
+        text=True,
+        timeout=6
+    )
+
+    if result.returncode:
+        raise RuntimeError(
+            result.stderr.strip()
+            or result.stdout.strip()
+            or "D-Bus falhou"
+        )
+
+    return result.stdout.strip()
+
+
+def active_outputs():
+    text = call(
+        "--method",
+        "org.freedesktop.DBus.Properties.Get",
+        IFACE,
+        "ActiveOutputs"
+    )
+
+    match = re.search(
+        r"<\(\s*(\d+)\s*,\s*(\d+)\s*\)>",
+        text
+    )
+
+    if not match:
+        raise RuntimeError(
+            "Formato inesperado de ActiveOutputs: " + text
+        )
+
+    return int(match.group(1)), int(match.group(2))
+
+
+def state():
+    internal, external = active_outputs()
+
+    print(
+        f"ACTIVE_OUTPUTS_INTERNAL={internal}",
+        flush=True
+    )
+    print(
+        f"ACTIVE_OUTPUTS_EXTERNAL={external}",
+        flush=True
+    )
+
+    return internal > 0
+
+
+def restore_brightness_if_needed():
+    path = BACK + "/brightness"
+
+    with open(path) as f:
+        current = int(f.read().strip())
+
+    if current > 0:
+        return
+
+    value = 25500
+
+    try:
+        with open(SAVED) as f:
+            saved = int(f.read().strip())
+
+        if 0 < saved <= 50000:
+            value = saved
+
+    except (OSError, ValueError):
+        pass
+
+    with open(path, "w") as f:
+        f.write(str(value) + "\n")
+
+    print(f"BRILHO_RESTAURADO={value}", flush=True)
+
+
+def wait_state(expected):
+    for _ in range(15):
+        time.sleep(0.15)
+
+        try:
+            internal, _ = active_outputs()
+
+            if (internal > 0) == expected:
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
+def turn_on():
+    call("--method", IFACE + ".TurnOn", "internal")
+
+    if not wait_state(True):
+        raise RuntimeError(
+            "LSC nao confirmou ativacao do painel"
+        )
+
+    restore_brightness_if_needed()
+
+    print("TELA_INTERNA=LIGADA", flush=True)
+
+
+def turn_off():
+    call("--method", IFACE + ".TurnOff", "internal")
+
+    if not wait_state(False):
+        # Recuperar se a transicao falhar.
+        try:
+            call("--method", IFACE + ".TurnOn", "internal")
+        except Exception:
+            pass
+
+        raise RuntimeError(
+            "LSC nao confirmou desligamento do painel"
+        )
+
+    print("TELA_INTERNA=DESLIGADA", flush=True)
+
+
+def main():
+    if os.geteuid() != 0:
+        raise RuntimeError("Execute como root via Polkit")
+
+    if len(sys.argv) != 2:
+        raise RuntimeError("Uso: toggle | on | status")
+
+    operation = sys.argv[1]
+
+    if operation not in ("toggle", "on", "status"):
+        raise RuntimeError("Operacao nao permitida")
+
+    fd = os.open(
+        LOCK,
+        os.O_RDWR | os.O_CREAT,
+        0o600
+    )
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+        if operation == "status":
+            state()
+            return
+
+        is_on = state()
+
+        if operation == "on":
+            if not is_on:
+                turn_on()
+            else:
+                restore_brightness_if_needed()
+                print("TELA_INTERNA=JA_LIGADA")
+
+        elif operation == "toggle":
+            if is_on:
+                turn_off()
+            else:
+                turn_on()
+
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print("ERRO_DISPLAY=" + str(e), file=sys.stderr)
+        sys.exit(1)

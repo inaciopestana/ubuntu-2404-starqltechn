@@ -1,0 +1,30 @@
+#!/bin/bash
+# s9-adsp-ensure: se a placa de som (ADSP) nao subiu no boot, aponta o kernel direto para o firmware do ADSP
+# (que fica na particao do modem) e religa o loader. Roda como ExecStartPre do s9-ubports-audio-hidl.service.
+# Uso: s9-adsp-ensure [--check]. Log persistente: /var/lib/s9-adsp.log (com boot_id e uptime, independente do relogio).
+FW=/android/vendor/firmware-modem/image
+P=/sys/module/firmware_class/parameters/path
+LOG=/var/lib/s9-adsp.log
+BID=$(cut -c1-8 /proc/sys/kernel/random/boot_id)
+card_ok(){ [ -c /dev/snd/controlC0 ] && grep -q 'sdm845-tavil-snd-card' /proc/asound/cards 2>/dev/null; }
+adsp_state(){ local d; for d in /sys/bus/msm_subsys/devices/*; do [ "$(cat $d/name 2>/dev/null)" = adsp ] && cat $d/state 2>/dev/null; done; }
+log(){ echo "$(date '+%F %T') boot=$BID up=$(cut -d' ' -f1 /proc/uptime) [adsp] $*" | tr -d '\000' >> $LOG; echo "S9_ADSP_ENSURE: $*"; }
+if [ "${1:-}" = "--check" ]; then echo "placa=$(card_ok && echo sim || echo nao) adsp=$(adsp_state) path=[$(cat $P 2>/dev/null)]"; exit 0; fi
+for i in $(seq 1 10); do
+  if card_ok; then log "placa ok sem ajuda (espera $(( (i-1)*2 ))s)"; exit 0; fi
+  sleep 2
+done
+[ -d "$FW" ] || { log "pasta do firmware ausente: $FW"; exit 0; }
+for t in 1 2 3; do
+  OLD=$(cat $P 2>/dev/null)
+  log "tentativa $t: adsp=$(adsp_state) path=[$OLD]"
+  echo -n "$FW" > $P 2>/dev/null
+  timeout 5 sh -c 'echo 1 > /sys/kernel/boot_adsp/boot' 2>/dev/null
+  for i in $(seq 1 20); do card_ok && break; sleep 1; done
+  card_ok && sleep 3
+  echo -n "$OLD" > $P 2>/dev/null
+  if card_ok; then log "placa apareceu na tentativa $t (adsp=$(adsp_state))"; exit 0; fi
+  sleep 5
+done
+log "sem placa apos 3 tentativas (adsp=$(adsp_state))"
+exit 0

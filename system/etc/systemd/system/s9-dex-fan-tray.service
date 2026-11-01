@@ -1,0 +1,12 @@
+[Unit]
+Description=DeX fan systray (waits for the XFCE panel)
+After=s9-miral-nested.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/s9-dex-fan-tray-launch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

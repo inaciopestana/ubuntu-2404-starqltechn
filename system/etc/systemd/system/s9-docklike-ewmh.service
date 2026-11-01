@@ -1,0 +1,19 @@
+# S9_DOCKLIKE_EWMH_BRIDGE
+[Unit]
+Description=Galaxy S9 Docklike Xwayland EWMH bridge
+BindsTo=s9-miral-nested.service
+PartOf=s9-miral-nested.service
+After=s9-miral-nested.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@S9_USER@
+Environment=DISPLAY=:0
+ExecStart=/usr/bin/python3 -u /usr/local/libexec/s9-docklike-ewmh.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+
+[Install]
+WantedBy=s9-miral-nested.service

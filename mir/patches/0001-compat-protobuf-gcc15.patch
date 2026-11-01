@@ -1,0 +1,13 @@
+--- a/src/protobuf/symbols.map.pre-s9-native-protobuf
++++ a/src/protobuf/symbols.map
+@@ -1187,6 +1187,10 @@
+     mir::protobuf::_SurfaceId_default_instance_;
+     mir::protobuf::_SurfaceSpecification_default_instance_;
+     mir::protobuf::_Rectangle_default_instance_;
++    # Protobuf 3.21 + GCC 15 may inline default_instance() and
++    # reference the generated backing globals from other DSOs.
++    mir::protobuf::_*_default_instance_;
++    mir::protobuf::wire::_*_default_instance_;
+     mir::protobuf::*::InternalSwap*;
+   };
+ } MIR_PROTOBUF_0.27;

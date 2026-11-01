@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Phone
+Comment=Calls and SMS
+Exec=/usr/local/bin/s9-telefone
+Icon=call-start
+Terminal=false
+Categories=X-S9-Telephony;

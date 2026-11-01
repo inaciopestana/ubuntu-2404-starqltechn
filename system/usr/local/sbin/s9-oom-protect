@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Keeps the display stack out of reach of the Android lowmemorykiller (processes with oom_score_adj < 0 are never chosen).
+# Only the compositor, Xwayland and the nested MirAL shell: they do not launch user apps, so nothing inherits the protection.
+PROT=-500
+while :; do
+  for p in $(pgrep -x Xwayland; pgrep -x s9-miral-shell; pgrep -f '[l]omiri-system-compositor'); do
+    cur=$(cat /proc/$p/oom_score_adj 2>/dev/null) || continue
+    [ "$cur" != "$PROT" ] && echo $PROT > /proc/$p/oom_score_adj 2>/dev/null
+  done
+  sleep 3
+done

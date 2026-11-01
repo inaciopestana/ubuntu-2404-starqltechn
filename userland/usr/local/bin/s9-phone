@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+import sys, json, socket, time
+S = '/run/s9-phone.sock'
+
+def connect():
+    s = socket.socket(socket.AF_UNIX); s.connect(S); return s
+
+def lines(s):
+    buf = b''
+    while True:
+        d = s.recv(65536)
+        if not d: return
+        buf += d
+        while b'\n' in buf:
+            l, buf = buf.split(b'\n', 1)
+            yield json.loads(l.decode())
+
+def request(req):
+    s = connect(); req['id'] = 1
+    s.sendall((json.dumps(req) + '\n').encode())
+    for m in lines(s):
+        if m.get('id') == 1 and 'ok' in m: return m
+
+def fmt(t): return time.strftime('%d/%m %H:%M', time.localtime(t))
+
+a = sys.argv[1:]
+if not a:
+    print('uso: s9-phone status | dial N | answer | hangup | dtmf D | mute on|off | sms N texto... | sms-list [N] | calls | watch'); sys.exit(1)
+c = a[0]
+if c == 'watch':
+    for m in lines(connect()): print(json.dumps(m, ensure_ascii=False), flush=True)
+    sys.exit(0)
+req = {'status': {'cmd': 'status'}, 'dial': {'cmd': 'dial', 'number': a[1] if len(a) > 1 else ''},
+       'answer': {'cmd': 'answer'}, 'hangup': {'cmd': 'hangup'}, 'dtmf': {'cmd': 'dtmf', 'digits': a[1] if len(a) > 1 else ''},
+       'mute': {'cmd': 'mute', 'on': (a[1] == 'on') if len(a) > 1 else True},
+       'sms': {'cmd': 'sms_send', 'number': a[1] if len(a) > 1 else '', 'text': ' '.join(a[2:])},
+       'sms-list': {'cmd': 'sms_list', 'number': a[1] if len(a) > 1 else None},
+       'calls': {'cmd': 'calls_list'}}.get(c)
+if not req: print('comando desconhecido'); sys.exit(1)
+r = request(req)
+if not r.get('ok'): print('ERRO:', r.get('error')); sys.exit(2)
+if c == 'sms-list':
+    for m in r['messages']: print('%s %s %-14s [%s] %s' % (fmt(m['ts']), '<-' if m['dir'] == 'in' else '->', m['number'], m['state'], m['text']))
+elif c == 'calls':
+    for m in r['calls']: print('%s %-10s %-14s %ds' % (fmt(m['ts']), m['result'], m['number'], m['duration']))
+else:
+    r.pop('id', None); r.pop('ok', None); print(json.dumps(r, ensure_ascii=False))

@@ -1,0 +1,190 @@
+#!/bin/bash
+# s9-chrome-x11 - Chrome em X11 (Xwayland :0 + Freedreno nativo) no Docklike; desliga de forma reversivel a ponte do Chrome Wayland
+# uso: s9-chrome-x11 aplicar | status | reverter [--miral]
+set -o pipefail
+U=${S9X_USER:-@S9_USER@}
+H=${S9X_HOME:-/home/$U}
+APP=${S9X_APP:-/opt/s9-chrome-x11}
+HELPER=${S9X_HELPER:-/usr/local/libexec/s9-docklike-ewmh.py}
+FLAGDIR=${S9X_FLAGDIR:-/etc/s9-docklike}
+STATE=${S9X_STATE:-/var/lib/s9-chrome-x11}
+DESK=$H/.local/share/applications/google-chrome.desktop
+OLDL=${S9X_OLDL:-/opt/s9-chrome-eglshim/start-stable.sh}
+NEWL=$APP/start.sh
+FLAG=$FLAGDIR/chrome-bridge.off
+MARK=S9_CHROME_BRIDGE_SWITCH_V1
+SVC=s9-docklike-ewmh.service
+SYSCTL=${S9X_SYSTEMCTL:-systemctl}
+
+if [ "$(id -u)" != 0 ] && [ -z "${S9X_TEST:-}" ]; then exec sudo -n "$0" "$@"; fi
+
+write_launcher() {
+cat > "$NEWL" <<'LAUNCH'
+#!/bin/bash
+# S9_CHROME_X11_V1 - Google Chrome em X11 (Xwayland :0) com Freedreno nativo (FD630/KGSL)
+set -u
+if [ "$(id -u)" -eq 0 ]; then echo "Execute como usuario, nao root" >&2; exit 2; fi
+U=$(id -un)
+NEED_IMPORT=0
+[ -z "${MESA_LOADER_DRIVER_OVERRIDE+x}" ] && NEED_IMPORT=1
+case "${__EGL_VENDOR_LIBRARY_FILENAMES:-}" in *libhybris*) NEED_IMPORT=1;; esac
+case "${XDG_RUNTIME_DIR:-}" in /run/s9-miral|"") NEED_IMPORT=1;; esac
+if [ "$NEED_IMPORT" = 1 ]; then
+  # lancado fora da sessao (ou com o ambiente do shim): copiar o ambiente GL do painel XFCE
+  P=$(pgrep -u "$U" -x xfce4-panel | head -n 1)
+  if [ -n "$P" ] && [ -r "/proc/$P/environ" ]; then
+    while IFS= read -r l; do export "$l"; done < <(tr '\0' '\n' < "/proc/$P/environ" | grep -E '^(LD_LIBRARY_PATH|LIBGL_DRIVERS_PATH|GBM_BACKENDS_PATH|__EGL_VENDOR_LIBRARY_FILENAMES|MESA_LOADER_DRIVER_OVERRIDE|TU_DEBUG|FD_KGSL_ENABLE_DMABUF|VK_DRIVER_FILES|LIBGL_KOPPER_DRI2|MESA_VK_WSI_DEBUG|DISPLAY|XDG_RUNTIME_DIR|PULSE_SERVER)=')
+  else
+    echo "aviso: painel XFCE nao encontrado; usando o ambiente atual" >&2
+  fi
+fi
+# remover tudo que e do shim EGL/hybris
+case "${LD_PRELOAD:-}" in *S9EGLShim*) unset LD_PRELOAD;; esac
+unset HYBRIS_EGLPLATFORM HYBRIS_USE_VENDOR_NAMESPACE HYBRIS_LD_LIBRARY_PATH EGL_PLATFORM ANDROID_ROOT ANDROID_DATA S9_EGLSHIM_DEBUG S9_EGL_FORCE_PLATFORM S9_EGL_EMULATE_SURFACELESS S9_EGL_VIRTUAL_DEVICE S9_EGLSHIM_LOG WAYLAND_DISPLAY
+export DISPLAY="${DISPLAY:-:0}"
+case "${XDG_RUNTIME_DIR:-}" in /run/s9-miral|"") export XDG_RUNTIME_DIR="/run/user/$(id -u)";; esac
+PROFILE="${S9_CHROME_X11_PROFILE:-$HOME/.config/google-chrome-stable-hybris}"
+mkdir -p "$PROFILE"
+if [ -n "$(pgrep -u "$U" -f -- '--ozone-platform=wayland')" ]; then
+  echo "aviso: ha um Chrome Wayland (shim) em execucao; ele e o perfil serao reaproveitados" >&2
+fi
+# shellcheck disable=SC2086
+exec /usr/bin/google-chrome-stable --user-data-dir="$PROFILE" --ozone-platform=x11 ${S9_CHROME_X11_FLAGS:-} "$@"
+LAUNCH
+chmod 755 "$NEWL"
+bash -n "$NEWL" && echo "   launcher: sintaxe ok ($NEWL)"
+}
+
+patch_helper() { # $1 = origem  $2 = destino
+python3 -I - "$1" "$2" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1], encoding='utf-8').read()
+MARK = 'S9_CHROME_BRIDGE_SWITCH_V1'
+if MARK in src:
+    print('JA_APLICADO'); sys.exit(3)
+if not re.search(r'^\s*import\b[^\n]*\bos\b', src, re.M):
+    sys.exit('ERRO: o helper nao importa os')
+lines = src.split('\n')
+idx = [i for i, l in enumerate(lines) if l.startswith('def s9_chrome_refresh(')]
+print('   def s9_chrome_refresh encontrada %d vez(es)' % len(idx))
+if len(idx) != 1:
+    sys.exit('ERRO: def s9_chrome_refresh deveria existir 1 vez')
+i = idx[0] + 1
+while i < len(lines) and (lines[i].strip() == '' or lines[i].strip().startswith('global ') or lines[i].strip().startswith('#')):
+    i += 1
+indent = re.match(r'\s*', lines[i]).group(0)
+ret = None
+for j in range(i, min(i + 30, len(lines))):
+    if 's9_chrome_last_poll < 0.65' in lines[j]:
+        ret = lines[j + 1].strip()
+        break
+print('   early-return do poll: %r' % ret)
+if not ret or not ret.startswith('return'):
+    sys.exit('ERRO: return do poll nao encontrado')
+block = [
+    indent + '# S9_CHROME_BRIDGE_SWITCH_V1: com /etc/s9-docklike/chrome-bridge.off a ponte do Chrome Wayland fica desligada',
+    indent + 'if os.path.exists("/etc/s9-docklike/chrome-bridge.off"):',
+    indent + '    if s9_chrome_proxy is not None:',
+    indent + '        s9_chrome_dispose()',
+    indent + '    ' + ret,
+]
+lines[i:i] = block
+open(sys.argv[2], 'w', encoding='utf-8').write('\n'.join(lines))
+print('   chave inserida na linha %d' % (i + 1))
+PYEOF
+}
+
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+
+do_aplicar() {
+  echo "[1/7] pre-requisitos"
+  for f in "$OLDL" "$DESK" "$HELPER"; do
+    [ -f "$f" ] && echo "   ok: $f" || { echo "ERRO: falta $f"; exit 1; }
+  done
+  echo "   .desktop atual:"; grep -n 'start-stable.sh\|start.sh' "$DESK" | sed 's/^/     /'
+  mkdir -p "$APP" "$STATE" "$FLAGDIR"
+  if [ -f "$STATE/last_backup" ] && [ -d "$(cat "$STATE/last_backup")" ]; then
+    BK=$(cat "$STATE/last_backup")
+    echo "[2/7] ja aplicado antes: mantendo o backup original em $BK"
+  else
+    TS=$(date +%Y%m%d-%H%M%S); BK=$STATE/backup-$TS
+    echo "[2/7] backups em $BK"
+    mkdir -p "$BK"; cp -pv "$DESK" "$BK/google-chrome.desktop"; cp -pv "$HELPER" "$BK/s9-docklike-ewmh.py"
+    echo "$BK" > "$STATE/last_backup"
+  fi
+  echo "[3/7] launcher X11"
+  write_launcher || exit 1
+  echo "[4/7] .desktop do Docklike (pin 'google-chrome' -> launcher X11)"
+  n=$(grep -c "$OLDL" "$DESK" || true); echo "   ocorrencias do launcher do shim: $n"
+  if [ "$n" -gt 0 ]; then
+    sed "s#$OLDL#$NEWL#g" "$DESK" > "$STATE/desk.new" && cat "$STATE/desk.new" > "$DESK" && rm -f "$STATE/desk.new"
+  fi
+  grep -n 'Exec=\|TryExec=' "$DESK" | sed 's/^/     /'
+  echo "[5/7] helper do Docklike: chave da ponte do Chrome Wayland"
+  rc=0; patch_helper "$HELPER" "$STATE/helper.new" || rc=$?
+  if [ "$rc" = 0 ]; then
+    python3 -m py_compile "$STATE/helper.new" && echo "   py_compile ok" || { echo "ERRO: helper patchado invalido; nada instalado"; rm -f "$STATE/helper.new"; exit 1; }
+    rm -rf "$STATE/__pycache__"
+    cat "$STATE/helper.new" > "$HELPER"; rm -f "$STATE/helper.new"
+    sha "$HELPER" > "$STATE/helper.sha"; echo "   helper patchado, sha $(cut -c1-16 "$STATE/helper.sha")"
+  elif [ "$rc" = 3 ]; then echo "   helper ja tinha a chave"
+  else echo "ERRO no patch do helper (rc=$rc); nada alterado no helper"; exit 1; fi
+  echo "[6/7] desligando a ponte (arquivo-chave $FLAG)"
+  touch "$FLAG"; ls -l "$FLAG"
+  echo "[7/7] reiniciando so o helper do Docklike"
+  if [ -z "${S9X_TEST:-}" ]; then
+    $SYSCTL restart $SVC; sleep 3; $SYSCTL is-active $SVC
+    journalctl -u $SVC --no-pager -n 6
+  else echo "   (teste: sem systemctl)"; fi
+  echo
+  echo "PRONTO. Feche o Chrome atual (qualquer um) e clique no icone do Chrome na dock."
+  echo "Conferir:  s9-chrome-x11 status      Voltar ao shim:  s9-chrome-x11 reverter [--miral]"
+}
+
+do_status() {
+  echo "== .desktop (pin google-chrome) =="; grep -n 'Exec=\|TryExec=' "$DESK" 2>&1
+  echo "== launcher X11 =="; ls -l "$NEWL" 2>&1
+  echo "== ponte do Chrome Wayland =="
+  [ -e "$FLAG" ] && echo "DESLIGADA ($FLAG existe)" || echo "LIGADA (sem $FLAG)"
+  echo "marcador no helper: $(grep -c $MARK "$HELPER") (1 = patch instalado)"
+  echo "== helper em execucao =="; $SYSCTL show -P ActiveState -P ActiveEnterTimestamp $SVC 2>&1
+  echo "== Chrome rodando (plataforma) =="
+  for p in $(pgrep -x chrome | head -n 40); do tr '\0' '\n' < /proc/$p/cmdline | grep -m1 -- '--ozone-platform' ; done | sort | uniq -c
+  echo "== ultimos eventos do proxy no journal (vazio = nenhum proxy criado) =="
+  journalctl -u $SVC --no-pager --since "-30min" 2>&1 | grep -a 'S9_CHROME_PROXY' | tail -n 5
+  echo "== ultimo backup =="; cat "$STATE/last_backup" 2>&1
+}
+
+do_reverter() {
+  BK=$(cat "$STATE/last_backup" 2>/dev/null)
+  [ -d "$BK" ] || { echo "ERRO: backup nao encontrado ($BK)"; exit 1; }
+  echo "[1/4] .desktop: launcher X11 -> launcher do shim"
+  if [ -f "$BK/google-chrome.desktop" ]; then cat "$BK/google-chrome.desktop" > "$DESK"; else sed "s#$NEWL#$OLDL#g" "$DESK" > "$STATE/desk.new" && cat "$STATE/desk.new" > "$DESK"; fi
+  grep -n 'Exec=\|TryExec=' "$DESK" | sed 's/^/     /'
+  echo "[2/4] religando a ponte (removendo $FLAG)"
+  rm -fv "$FLAG"
+  echo "[3/4] helper"
+  if [ -f "$STATE/helper.sha" ] && [ "$(sha "$HELPER")" = "$(cat "$STATE/helper.sha")" ] && [ -f "$BK/s9-docklike-ewmh.py" ]; then
+    cat "$BK/s9-docklike-ewmh.py" > "$HELPER"; echo "   helper restaurado do backup"; rm -f "$STATE/helper.sha"
+  else echo "   helper mudou depois do patch (ou ja restaurado): mantido; a chave sem o arquivo-flag nao faz nada"; fi
+  echo "[4/4] reiniciando"
+  if [ -z "${S9X_TEST:-}" ]; then
+    if [ "$1" = "--miral" ]; then
+      echo "   helper + MirAL juntos (fecha os apps do XFCE), depois clipbridge"
+      $SYSCTL restart $SVC; $SYSCTL restart s9-miral-nested.service; sleep 6
+      $SYSCTL list-unit-files | grep -c '^s9-clipbridge.service' && $SYSCTL restart s9-clipbridge.service
+    else
+      $SYSCTL restart $SVC; sleep 3; $SYSCTL is-active $SVC
+      echo "ATENCAO: para o Chrome do shim voltar a aparecer na dock, reinicie tambem o MirAL: s9-chrome-x11 reverter --miral"
+    fi
+  else echo "   (teste: sem systemctl)"; fi
+  mv -f "$STATE/last_backup" "$STATE/last_backup.revertido"
+  echo "revertido. (backups continuam em $BK)"
+}
+
+case "${1:-}" in
+  aplicar)  do_aplicar ;;
+  status)   do_status ;;
+  reverter) do_reverter "${2:-}" ;;
+  *) echo "uso: s9-chrome-x11 aplicar | status | reverter [--miral]"; exit 1 ;;
+esac

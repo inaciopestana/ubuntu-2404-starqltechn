@@ -1,0 +1,65 @@
+#!/bin/bash
+# s9-clock-keep v2: o RTC do S9 nao guarda a data real e o Android (time daemon) recua o relogio para 2018/2019 poucos segundos depois do restore.
+# restore  (inicio do boot): se a hora salva for maior que a atual, ajusta o relogio para ela (nunca volta no tempo).
+# guard    (primeiros ~4 min do boot, 1 s): mantem uma linha de base (hora + uptime); se o relogio ficar > 5 s ATRAS do esperado, devolve; se saltar para frente (NTP), adota a nova base.
+# tick     (a cada minuto, pelo timer): se o relogio ficou atras da hora salva, restaura; senao grava a hora atual (se plausivel).
+# save | shutdown (grava a hora; shutdown registra no log) | status
+D=${S9_STATE_DIR:-/var/lib/s9-clock}
+F=$D/last
+LOG=$D/events.log
+MIN=1735689600   # 2025-01-01 UTC
+MAX=4102444800   # 2100-01-01 UTC
+getnow(){ if [ -n "${S9_FAKE_NOW:-}" ]; then echo "$S9_FAKE_NOW"; else date +%s; fi; }
+getup(){ if [ -n "${S9_FAKE_UP:-}" ]; then echo "$S9_FAKE_UP"; else local u; read -r u _ < /proc/uptime; echo "${u%%.*}"; fi; }
+BID=$(cut -c1-8 /proc/sys/kernel/random/boot_id 2>/dev/null)
+mkdir -p "$D"
+fmt(){ date -u -d "@$1" '+%F %T' 2>/dev/null; }
+saved(){ local v; v=$(cat "$F" 2>/dev/null); case "$v" in ''|*[!0-9]*) echo 0;; *) echo "$v";; esac; }
+log(){ echo "boot=$BID up=$(getup)s clock=$(fmt "$(getnow)")Z $*" >> "$LOG"; }
+setclock(){ if [ -n "${S9_DRY_SET:-}" ]; then echo "[dry] ajustaria o relogio para $1"; else date -u -s "@$1" >/dev/null; fi; }
+dosave(){ local s n; s=$(saved); n=$(getnow)
+  if [ "$n" -ge "$MIN" ] && [ "$n" -le "$MAX" ] && [ "$n" -ge "$s" ]; then
+    echo "$n" > "$F.tmp" && sync "$F.tmp" 2>/dev/null; mv -f "$F.tmp" "$F"; return 0
+  fi
+  return 1
+}
+behind_saved(){ local s n; s=$(saved); n=$(getnow); [ "$s" -ge "$MIN" ] && [ "$s" -le "$MAX" ] && [ "$s" -gt "$n" ]; }
+G_BN=0; G_BU=0; G_R=ok
+guard_init(){ G_BN=$(getnow); G_BU=$(getup); }
+guard_step(){ local n=$1 u=$2 e; e=$(( G_BN + u - G_BU )); G_R=ok
+  if [ "$n" -lt $(( e - 5 )) ] && [ "$e" -ge "$MIN" ] && [ "$e" -le "$MAX" ]; then G_R="set $e"
+  elif [ "$n" -gt $(( e + 5 )) ]; then G_BN=$n; G_BU=$u; G_R=rebase
+  fi
+}
+[ -n "${S9_SOURCE_ONLY:-}" ] && return 0 2>/dev/null
+case "${1:-status}" in
+  restore)
+    s=$(saved); n=$(getnow)
+    if behind_saved; then setclock "$s"; log "restaurado: $(fmt "$n")Z -> $(fmt "$s")Z"; else log "nada a fazer (salvo=$(fmt "$s")Z)"; fi ;;
+  guard)
+    guard_init; log "guard iniciado (base $(fmt "$G_BN")Z)"
+    i=0; ok=0; fixes=0
+    while [ "$i" -lt "${S9_GUARD_MAX:-240}" ]; do
+      sleep "${S9_GUARD_SLEEP:-1}"; i=$((i+1))
+      n=$(getnow); u=$(getup); guard_step "$n" "$u"; r=$G_R
+      case "$r" in
+        set\ *) e=${r#set }; setclock "$e"; fixes=$((fixes+1)); log "guard: relogio recuou para $(fmt "$n")Z, devolvido a $(fmt "$e")Z" ;;
+        rebase) log "guard: relogio avancou para $(fmt "$n")Z (nova base)" ;;
+      esac
+      if [ $((i % 5)) -eq 0 ]; then
+        if [ -e /run/systemd/timesync/synchronized ]; then ok=$((ok+1)); [ "$ok" -ge 2 ] && break; else ok=0; fi
+      fi
+    done
+    log "guard encerrado apos ${i}s ($fixes correcoes)" ;;
+  tick)
+    if behind_saved; then s=$(saved); n=$(getnow); setclock "$s"; log "tick: relogio estava atras ($(fmt "$n")Z), restaurado a $(fmt "$s")Z"; else dosave; fi ;;
+  save) dosave ;;
+  shutdown) if dosave; then log "salvo no desligamento"; else log "NAO salvo no desligamento (relogio implausivel ou atrasado)"; fi ;;
+  status)
+    s=$(saved); n=$(getnow)
+    echo "hora salva : $(fmt "$s")Z   (epoch $s)"
+    echo "hora atual : $(fmt "$n")Z   (epoch $n)   diferenca: $(( n - s )) s"
+    echo "ultimos eventos:"; tail -8 "$LOG" 2>/dev/null ;;
+  *) echo "uso: s9-clock-keep restore|guard|tick|save|shutdown|status"; exit 1 ;;
+esac
+exit 0

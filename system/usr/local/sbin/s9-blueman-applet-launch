@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -u
+
+USER_S9=@S9_USER@
+HOME_S9=@S9_HOME@
+UID_S9=$(id -u "$USER_S9")
+
+get_var() {
+    local key="$1"
+    local pid comm source value args
+
+    while read -r pid comm; do
+
+        case "$comm" in
+            nm-applet|xfce4-panel|xfce4-session)
+                ;;
+            runuser)
+                args=$(tr '\0' ' ' \
+                    < "/proc/$pid/cmdline" 2>/dev/null) || continue
+
+                [[ "$args" == *nm-applet* ]] || continue
+                ;;
+            *)
+                continue
+                ;;
+        esac
+
+        for source in environ cmdline; do
+
+            [[ -r "/proc/$pid/$source" ]] || continue
+
+            value=$(
+                tr '\0' '\n' < "/proc/$pid/$source" 2>/dev/null |
+                sed -n "s/^${key}=//p" |
+                head -n 1
+            )
+
+            if [[ -n "$value" ]]; then
+                printf '%s\n' "$value"
+                return 0
+            fi
+        done
+
+    done < <(ps -eo pid=,comm=)
+
+    return 1
+}
+
+for attempt in $(seq 1 45); do
+
+    BUS=$(get_var DBUS_SESSION_BUS_ADDRESS || true)
+    DISPLAY_S9=$(get_var DISPLAY || true)
+    AUTH=$(get_var XAUTHORITY || true)
+    RUNTIME=$(get_var XDG_RUNTIME_DIR || true)
+
+    DISPLAY_S9="${DISPLAY_S9:-:0}"
+    AUTH="${AUTH:-$HOME_S9/.Xauthority}"
+    RUNTIME="${RUNTIME:-/run/user/$UID_S9}"
+
+    # Ultima alternativa: barramento padrao do usuario.
+    if [[ -z "$BUS" && -S "$RUNTIME/bus" ]]; then
+        BUS="unix:path=$RUNTIME/bus"
+    fi
+
+    if [[ "$BUS" == unix:path=* ]]; then
+
+        SOCK="${BUS#unix:path=}"
+        SOCK="${SOCK%%,*}"
+
+        if [[ ! -S "$SOCK" ]]; then
+            BUS=""
+        fi
+    fi
+
+    if [[ -n "$BUS" ]]; then
+
+        echo "SESSAO_ENCONTRADA=1"
+        echo "DISPLAY=$DISPLAY_S9"
+        echo "DBUS=$BUS"
+        echo "XAUTHORITY=$AUTH"
+        echo "TENTATIVA=$attempt"
+
+        exec /usr/sbin/runuser -u "$USER_S9" -- \
+            /usr/bin/env \
+            HOME="$HOME_S9" \
+            USER="$USER_S9" \
+            LOGNAME="$USER_S9" \
+            DISPLAY="$DISPLAY_S9" \
+            XAUTHORITY="$AUTH" \
+            XDG_RUNTIME_DIR="$RUNTIME" \
+            DBUS_SESSION_BUS_ADDRESS="$BUS" \
+            XDG_CURRENT_DESKTOP=XFCE \
+            XDG_SESSION_TYPE=x11 \
+            GDK_BACKEND=x11 \
+            /usr/bin/blueman-applet
+    fi
+
+    if (( attempt % 5 == 0 )); then
+        echo "AGUARDANDO_DBUS tentativa=$attempt"
+    fi
+
+    sleep 2
+done
+
+echo "ERRO=NAO_FOI_POSSIVEL_LOCALIZAR_O_DBUS" >&2
+exit 1

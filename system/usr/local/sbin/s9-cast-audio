@@ -1,0 +1,108 @@
+#!/bin/bash
+# s9-cast-audio: audio do celular para a transmissao de tela.
+# O Pulse REAL vive num namespace de mount privado, entao entramos nele com nsenter.
+#   check    -> imprime o sink padrao se der para capturar (rc 0), senao rc 1
+#   (nada)   -> escreve PCM s16le 48 kHz estereo no stdout (monitor do sink "Screen Cast" se estiver ativo, senao do sink padrao)
+#   setup    -> cria o sink "Screen Cast" (null sink), faz dele o padrao e move para ele tudo que toca (o celular fica mudo)
+#   keep     -> laco: move para o sink "Screen Cast" qualquer stream novo (rodar em segundo plano durante a transmissao)
+#   restore  -> desfaz o setup: devolve cada stream ao sink de origem, restaura o sink padrao e remove o sink "Screen Cast"
+U=${S9_CAST_USER:-@S9_USER@}
+RUN=${S9_CAST_RUN:-/run/s9-cast}
+NULL=s9_screencast
+mkdir -p "$RUN"
+MODE=${1:-capture}
+
+pulse_pid() {
+  local host p
+  host=$(readlink /proc/1/ns/mnt)
+  for p in $(ps -eo pid,comm | awk '$2=="pulseaudio"{print $1}'); do
+    [ "$(readlink /proc/$p/ns/mnt)" != "$host" ] || continue
+    tr '\0' ' ' < /proc/$p/cmdline | grep -q 'exit-idle-time=-1' || continue
+    echo "$p"; return 0
+  done
+  return 1
+}
+clear_state() { rm -f "$RUN/audio.mod" "$RUN/audio.prev" "$RUN/audio.src" "$RUN/audio.inputs"; }
+
+if [ -n "$S9_CAST_NO_NS" ]; then
+  PID=0
+  NS() { "$@"; }
+else
+  PID=$(pulse_pid) || { [ "$MODE" = restore ] && { clear_state; exit 0; }; echo "s9-cast-audio: Pulse real nao encontrado" >&2; exit 1; }
+  NS() { nsenter -t "$PID" -m -- runuser -u "$U" -- env HOME="/home/$U" XDG_RUNTIME_DIR=/run/user/1000 "$@"; }
+fi
+pa() { NS pactl "$@"; }
+load_null() {   # o Pulse deste celular recusa a sintaxe com aspas simples/duplas misturadas; tenta varias ate uma funcionar
+  local d out="" rc=1
+  for d in "sink_properties=\"device.description='Screen Cast'\"" "sink_properties=device.description=Screen_Cast" 'sink_properties=device.description="Screen Cast"' ""; do
+    if [ -n "$d" ]; then
+      out=$(pa load-module module-null-sink "sink_name=$NULL" "$d" rate=48000 channels=2 2>&1); rc=$?
+    else
+      out=$(pa load-module module-null-sink "sink_name=$NULL" rate=48000 channels=2 2>&1); rc=$?
+    fi
+    [ "$rc" -eq 0 ] && { LOADED_WITH=${d:-sem descricao}; return 0; }
+  done
+  echo "$out" >&2
+  return 1
+}
+sink_exists() { pa list short sinks 2>/dev/null | awk '{print $2}' | grep -qx "$1"; }
+sink_index() { pa list short sinks 2>/dev/null | awk -v n="$1" '$2==n{print $1; exit}'; }
+
+SINK=$(pa info 2>/dev/null | sed -n 's/^Default Sink: *//p')
+[ -n "$SINK" ] || { echo "s9-cast-audio: sem sink padrao" >&2; exit 1; }
+
+case "$MODE" in
+  check)
+    echo "$SINK"; exit 0;;
+  setup)
+    if [ -s "$RUN/audio.mod" ] && sink_exists "$NULL"; then echo "ja ativo"; exit 0; fi
+    declare -A NM
+    while read -r idx name _; do NM[$idx]=$name; done < <(pa list short sinks)
+    : > "$RUN/audio.inputs"
+    while read -r id sidx _; do echo "$id ${NM[$sidx]}" >> "$RUN/audio.inputs"; done < <(pa list short sink-inputs)
+    if ! sink_exists "$NULL"; then
+      load_null || { echo "falha ao criar o sink" >&2; clear_state; exit 1; }
+    fi
+    echo "$SINK" > "$RUN/audio.prev"; echo "$NULL.monitor" > "$RUN/audio.src"; echo 1 > "$RUN/audio.mod"
+    pa set-default-sink "$NULL" || { echo "falha ao trocar o sink padrao" >&2; exit 1; }
+    while read -r id _; do pa move-sink-input "$id" "$NULL" 2>/dev/null; done < <(pa list short sink-inputs)
+    echo "ok: audio desviado para '$NULL' (sink anterior: $SINK${LOADED_WITH:+; propriedades: $LOADED_WITH})"
+    exit 0;;
+  keep)
+    read -r -d '' LOOP <<'LOOPEND' || true
+n=s9_screencast
+while :; do
+  idx=$(pactl list short sinks | awk -v n="$n" '$2==n{print $1; exit}')
+  if [ -n "$idx" ]; then
+    pactl list short sink-inputs | awk -v i="$idx" '$2!=i{print $1}' | while read -r id; do pactl move-sink-input "$id" "$n" 2>/dev/null; done
+  fi
+  sleep 2
+done
+LOOPEND
+    if [ -n "$S9_CAST_NO_NS" ]; then exec bash -c "$LOOP"; fi
+    exec nsenter -t "$PID" -m -- runuser -u "$U" -- env HOME="/home/$U" XDG_RUNTIME_DIR=/run/user/1000 bash -c "$LOOP";;
+  restore)
+    [ -e "$RUN/audio.mod" ] || [ -e "$RUN/audio.src" ] || [ -e "$RUN/audio.inputs" ] || exit 0
+    PREV=$(cat "$RUN/audio.prev" 2>/dev/null)
+    if [ -n "$PREV" ] && sink_exists "$PREV"; then pa set-default-sink "$PREV"; fi
+    while read -r id name; do
+      [ -n "$name" ] && sink_exists "$name" && pa move-sink-input "$id" "$name" 2>/dev/null
+    done < <(cat "$RUN/audio.inputs" 2>/dev/null)
+    NI=$(sink_index "$NULL")
+    if [ -n "$NI" ] && [ -n "$PREV" ]; then
+      pa list short sink-inputs | awk -v i="$NI" '$2==i{print $1}' | while read -r id; do pa move-sink-input "$id" "$PREV" 2>/dev/null; done
+    fi
+    pa list short modules 2>/dev/null | awk -v n="sink_name=$NULL" '$2=="module-null-sink" && index($0,n){print $1}' | while read -r m; do pa unload-module "$m"; done
+    clear_state
+    echo "ok: audio restaurado (sink padrao: ${PREV:-?})"
+    exit 0;;
+  capture)
+    SRC=$(cat "$RUN/audio.src" 2>/dev/null)
+    if [ -z "$SRC" ] || ! sink_exists "${SRC%.monitor}"; then SRC="$SINK.monitor"; fi
+    if [ -n "$S9_CAST_NO_NS" ]; then
+      exec ffmpeg -nostdin -hide_banner -loglevel error -fflags nobuffer -f pulse -fragment_size 3840 -i "$SRC" -f s16le -ar 48000 -ac 2 pipe:1
+    fi
+    exec nsenter -t "$PID" -m -- runuser -u "$U" -- env HOME="/home/$U" XDG_RUNTIME_DIR=/run/user/1000 \
+      ffmpeg -nostdin -hide_banner -loglevel error -fflags nobuffer -f pulse -fragment_size 3840 -i "$SRC" -f s16le -ar 48000 -ac 2 pipe:1;;
+  *) echo "uso: s9-cast-audio check|setup|keep|restore|(nada = captura)"; exit 1;;
+esac

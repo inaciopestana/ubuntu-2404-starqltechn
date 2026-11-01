@@ -1,0 +1,45 @@
+#!/bin/sh
+
+export XCURSOR_THEME=DMZ-Black
+export XCURSOR_SIZE=64
+
+echo "===== FORCE CURSOR ====="
+echo "DISPLAY=${DISPLAY:-<vazio>}"
+echo "XCURSOR_THEME=$XCURSOR_THEME"
+echo "XCURSOR_SIZE=$XCURSOR_SIZE"
+
+if command -v xrdb >/dev/null 2>&1; then
+    printf '%s\n' \
+      'Xcursor.theme: DMZ-Black' \
+      'Xcursor.size: 64' |
+      xrdb -merge || true
+fi
+
+if command -v xfconf-query >/dev/null 2>&1; then
+
+    xfconf-query \
+      -c xsettings \
+      -p /Gtk/CursorThemeName \
+      -s DMZ-Black 2>/dev/null ||
+    xfconf-query \
+      -c xsettings \
+      -p /Gtk/CursorThemeName \
+      -n -t string \
+      -s DMZ-Black || true
+
+    xfconf-query \
+      -c xsettings \
+      -p /Gtk/CursorThemeSize \
+      -s 64 2>/dev/null ||
+    xfconf-query \
+      -c xsettings \
+      -p /Gtk/CursorThemeSize \
+      -n -t int \
+      -s 64 || true
+fi
+
+if command -v xsetroot >/dev/null 2>&1; then
+    xsetroot -cursor_name left_ptr || true
+fi
+
+exit 0

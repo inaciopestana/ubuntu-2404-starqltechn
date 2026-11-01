@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""s9-dex-fan - controle da ventoinha da Samsung DeX Station (EE-MG950) no Galaxy S9.
+
+Usa /sys/class/sec/ccic/dex_fan_uvdm (driver MAX77705): o valor decimal escrito vira a
+mensagem UVDM enviada a dock. Palavra de 32 bits 0xA02001nn: nn=0x10 OFF, 0x11 LOW, 0x12 MEDIUM, 0x13 HIGH.
+"""
+import os, sys, time, glob, signal, subprocess
+
+SYS   = os.environ.get('S9FAN_SYS',   '/sys/class/sec/ccic/dex_fan_uvdm')
+IDS   = os.environ.get('S9FAN_IDS',   '/sys/class/sec/ccic/usbpd_ids')
+THERM = os.environ.get('S9FAN_THERM', '/sys/class/thermal')
+CONF  = os.environ.get('S9FAN_CONF',  '/etc/s9-dex-fan.conf')
+SDIR  = os.environ.get('S9FAN_STATE', '/var/lib/s9-dex-fan')
+MODEF = SDIR + '/mode'
+LASTF = SDIR + '/last'
+NAMES = ['off', 'low', 'medium', 'high']
+CODES = {'off': 16, 'low': 17, 'medium': 18, 'high': 19}
+DEF = dict(MIN_LEVEL='low', MAX_LEVEL='high', INTERVAL=5, DWELL=20, REASSERT=60,
+           T_LOW_ON=50, T_LOW_OFF=45, T_MED_ON=62, T_MED_OFF=56,
+           T_HIGH_ON=72, T_HIGH_OFF=66, T_EMERG=80,
+           CODE_OFF=0xA0200110, CODE_LOW=0xA0200111, CODE_MEDIUM=0xA0200112, CODE_HIGH=0xA0200113)
+
+
+def load_conf():
+    c = dict(DEF)
+    try:
+        for ln in open(CONF):
+            ln = ln.split('#', 1)[0].strip()
+            if '=' not in ln:
+                continue
+            k, v = (x.strip() for x in ln.split('=', 1))
+            if k in c:
+                c[k] = v.lower() if k.endswith('_LEVEL') else int(v, 0)
+    except (OSError, ValueError):
+        pass
+    return c
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def dock_present():
+    try:
+        return 'a020' in open(IDS).read().lower()
+    except OSError:
+        return False
+
+
+def read_temp():
+    """Maior temperatura (C) entre os sensores reais cpu*/gpu* '-usr'. None se falhar."""
+    best = None
+    for z in glob.glob(THERM + '/thermal_zone*'):
+        try:
+            t = open(z + '/type').read().strip()
+            if not (t.endswith('-usr') and (t.startswith('cpu') or t.startswith('gpu'))):
+                continue
+            v = int(open(z + '/temp').read().strip())
+        except (OSError, ValueError):
+            continue
+        v = v / 1000.0 if abs(v) > 1000 else float(v)
+        if best is None or v > best:
+            best = v
+    return best
+
+
+def write_code(code):
+    """Escreve o codigo no sysfs com timeout. Retorna (ok, mensagem)."""
+    if (code & 0xFFFFFF00) != 0xA0200100 or not 0x10 <= (code & 0xFF) <= 0x13:
+        return False, 'palavra fora de 0xA0200110..0xA0200113'
+    try:
+        r = subprocess.run(['timeout', '5', 'sh', '-c', 'echo %d > %s' % (code, SYS)],
+                           capture_output=True, text=True)
+    except OSError as e:
+        return False, str(e)
+    if r.returncode:
+        return False, (r.stderr.strip() or 'rc=%d' % r.returncode)
+    return True, 'ok'
+
+
+def set_level(name, cfg):
+    if not dock_present():
+        return False, 'DeX Station nao detectada (usbpd_ids != 04e8:a020)'
+    ok, msg = write_code(cfg['CODE_' + name.upper()])
+    if ok:
+        try:
+            os.makedirs(SDIR, exist_ok=True)
+            open(LASTF, 'w').write('%s %d\n' % (name, time.time()))
+        except OSError:
+            pass
+    return ok, msg
+
+
+def get_mode():
+    try:
+        m = open(MODEF).read().strip()
+        return m if m in NAMES or m == 'auto' else 'auto'
+    except OSError:
+        return 'auto'
+
+
+def set_mode(m):
+    os.makedirs(SDIR, exist_ok=True)
+    open(MODEF, 'w').write(m + '\n')
+
+
+def clamp(idx, cfg):
+    lo = NAMES.index(cfg['MIN_LEVEL']) if cfg['MIN_LEVEL'] in NAMES else 1
+    hi = NAMES.index(cfg['MAX_LEVEL']) if cfg['MAX_LEVEL'] in NAMES else 3
+    return max(lo, min(hi, idx))
+
+
+def next_level(cur, temp, cfg, since_change):
+    """cur=indice atual (0..3). Histerese: sobe na hora, desce so apos DWELL s."""
+    if temp is None or temp >= cfg['T_EMERG']:
+        return clamp(3, cfg) if temp is None else 3
+    on = {1: cfg['T_LOW_ON'], 2: cfg['T_MED_ON'], 3: cfg['T_HIGH_ON']}
+    off = {1: cfg['T_LOW_OFF'], 2: cfg['T_MED_OFF'], 3: cfg['T_HIGH_OFF']}
+    new = cur
+    while new < 3 and temp >= on[new + 1]:
+        new += 1
+    if new == cur and since_change >= cfg['DWELL']:
+        while new > 0 and temp <= off[new]:
+            new -= 1
+    return clamp(new, cfg)
+
+
+def daemon():
+    cfg = load_conf()
+    cur = None            # indice do nivel aplicado
+    changed = 0.0
+    asserted = 0.0
+    stop = []
+    signal.signal(signal.SIGTERM, lambda *a: stop.append(1))
+    signal.signal(signal.SIGINT, lambda *a: stop.append(1))
+    log('s9-dex-fan: iniciado (min=%s max=%s)' % (cfg['MIN_LEVEL'], cfg['MAX_LEVEL']))
+    while not stop:
+        cfg = load_conf()
+        now = time.time()
+        if not dock_present():
+            if cur is not None:
+                log('dock ausente; aguardando')
+            cur = None
+            time.sleep(cfg['INTERVAL'])
+            continue
+        mode = get_mode()
+        temp = read_temp()
+        if mode == 'off' and temp is not None and temp >= cfg['T_HIGH_ON']:
+            log('protecao: %.1fC com ventoinha off; voltando ao modo automatico' % temp)
+            set_mode('auto'); mode = 'auto'
+        if mode == 'auto':
+            want = next_level(cur if cur is not None else 2, temp, cfg, now - changed)
+        else:
+            want = NAMES.index(mode)
+            if temp is not None and temp >= cfg['T_EMERG']:
+                want = 3      # emergencia vale em qualquer modo manual
+        if want != cur or now - asserted >= cfg['REASSERT']:
+            ok, msg = set_level(NAMES[want], cfg)
+            if ok:
+                if want != cur:
+                    log('nivel %s (modo=%s temp=%s)' % (NAMES[want], mode,
+                        'n/d' if temp is None else '%.1fC' % temp))
+                    changed = now
+                cur, asserted = want, now
+            else:
+                log('falha ao aplicar %s: %s' % (NAMES[want], msg))
+                asserted = now - cfg['REASSERT'] + 15   # tenta de novo em 15 s
+        time.sleep(cfg['INTERVAL'])
+    if cur == 0:   # nunca deixar desligada ao sair
+        set_level('low', cfg)
+    log('s9-dex-fan: encerrado')
+
+
+def status():
+    cfg = load_conf()
+    t = read_temp()
+    last = '-'
+    try:
+        last = open(LASTF).read().strip()
+    except OSError:
+        pass
+    svc = subprocess.run(['systemctl', 'is-active', 's9-dex-fan.service'],
+                         capture_output=True, text=True).stdout.strip() or '?'
+    print('dock:        %s' % ('DeX Station detectada' if dock_present() else 'nao detectada'))
+    try:
+        print('usbpd_ids:   %s' % open(IDS).read().strip())
+    except OSError:
+        print('usbpd_ids:   (ilegivel)')
+    print('temperatura: %s' % ('n/d' if t is None else '%.1f C (max cpu/gpu)' % t))
+    print('modo:        %s   servico: %s' % (get_mode(), svc))
+    print('ultimo cmd:  %s  (nome epoch)' % last)
+    print('faixa:       min=%s max=%s' % (cfg['MIN_LEVEL'], cfg['MAX_LEVEL']))
+    print('limiares C:  low>=%d med>=%d high>=%d | desce low<=%d med<=%d high<=%d | emerg>=%d' % (
+        cfg['T_LOW_ON'], cfg['T_MED_ON'], cfg['T_HIGH_ON'],
+        cfg['T_LOW_OFF'], cfg['T_MED_OFF'], cfg['T_HIGH_OFF'], cfg['T_EMERG']))
+    print('(a dock nao informa RPM; confirme pelo som)')
+
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ('-h', '--help', 'help'):
+        print(__doc__)
+        print('uso: s9-dex-fan status | off|low|medium|high | auto | raw <0xA0200110..13> | enable | disable | daemon')
+        return 0
+    c = a[0]
+    cfg = load_conf()
+    if c == 'daemon':
+        daemon(); return 0
+    if c == 'status':
+        status(); return 0
+    if os.geteuid() != 0:
+        os.execvp('sudo', ['sudo', '-n', os.path.realpath(sys.argv[0])] + a)
+    if c in NAMES:
+        if c == 'off':
+            print('aviso: ventoinha desligada; o servico volta ao automatico se passar de %d C' % cfg['T_HIGH_ON'])
+        set_mode(c)
+        ok, msg = set_level(c, cfg)
+        print('%s: %s' % (c, msg))
+        return 0 if ok else 1
+    if c == 'auto':
+        set_mode('auto'); print('modo automatico (vale com o servico ativo: s9-dex-fan enable)'); return 0
+    if c == 'raw':
+        try:
+            n = int(a[1], 0)
+        except (IndexError, ValueError):
+            print('uso: s9-dex-fan raw <0xA0200110..0xA0200113>'); return 2
+        ok, msg = write_code(n); print('raw 0x%X: %s' % (n, msg)); return 0 if ok else 1
+    if c in ('enable', 'disable'):
+        os.execvp('systemctl', ['systemctl', c, '--now', 's9-dex-fan.service'])
+    print('comando desconhecido: %s' % c); return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())

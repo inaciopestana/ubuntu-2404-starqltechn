@@ -1,0 +1,50 @@
+diff --git a/build.sh b/build.sh
+index 3e8a854..2ab4f98 100755
+--- a/build.sh
++++ b/build.sh
+@@ -104,6 +104,12 @@ fi
+ 
+ "$SCRIPT/make-bootimage.sh" "${TMPDOWN}" "${TMPDOWN}/KERNEL_OBJ" "${TMPDOWN}/halium-boot-ramdisk.img" \
+     "${TMP}/partitions/boot.img" "${TMP}/system"
++
++# Keep the standalone artifact synchronized with the boot image embedded in
++# the device tarball. --remove-destination breaks any old hardlink first, so
++# rebuilding cannot modify an image preserved in a previous output folder.
++cp --remove-destination "${TMP}/partitions/boot.img" "${OUT}/boot.img"
++
+ if [ "$ONLY_KERNEL" = "true" ]; then
+     exit 0
+ fi
+diff --git a/make-bootimage.sh b/make-bootimage.sh
+index 10882bc..f937e71 100755
+--- a/make-bootimage.sh
++++ b/make-bootimage.sh
+@@ -313,6 +313,28 @@ else
+     fi
+ fi
+ 
++# STAR2_FORCE_SECOND_ADDR_BEGIN
++# Alguns bootloaders Samsung exigem second_addr mesmo sem um second payload.
++if [ "${deviceinfo_bootimg_force_second_address:-false}" = "true" ]; then
++    python3 - "$OUT" "$deviceinfo_flash_offset_base" "$deviceinfo_flash_offset_second" <<'PY_STAR2_SECOND_ADDR'
++import struct
++import sys
++
++image, base_text, offset_text = sys.argv[1:4]
++address = (int(base_text, 0) + int(offset_text, 0)) & 0xffffffff
++
++with open(image, "r+b") as boot:
++    if boot.read(8) != b"ANDROID!":
++        raise RuntimeError("boot.img sem cabecalho ANDROID!")
++
++    boot.seek(28)
++    boot.write(struct.pack("<I", address))
++
++print("Samsung second_addr aplicado: 0x%08x" % address)
++PY_STAR2_SECOND_ADDR
++fi
++# STAR2_FORCE_SECOND_ADDR_END
++
+ if [ -n "$deviceinfo_bootimg_partition_size" ]; then
+     avb_add_hash_footer "$OUT" "$deviceinfo_bootimg_partition_size"
+ 

@@ -1,0 +1,8 @@
+[Unit]
+Description=Save the current time every minute (s9-clock-keep)
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=60
+AccuracySec=5s
+[Install]
+WantedBy=timers.target

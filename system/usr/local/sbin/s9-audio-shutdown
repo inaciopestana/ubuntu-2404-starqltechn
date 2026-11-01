@@ -1,0 +1,44 @@
+#!/bin/bash
+# s9-audio-shutdown: quiesce ordenado do audio antes do desligamento (chamado pelo ExecStop do s9-ubports-audio-hidl.service).
+# Nunca usa systemctl. Cada passo tem timeout; falha de um passo nao impede os seguintes. Uso: s9-audio-shutdown [--dry]
+U=@S9_USER@
+XR=/run/user/1000
+LOG=/var/lib/s9-pre-shutdown.log
+DRY=0; [ "${1:-}" = "--dry" ] && DRY=1
+if [ "${1:-}" != "--run" ] && [ "$DRY" = 0 ]; then exec timeout 24 "$0" --run; fi
+L(){ logger -t s9-audio-shutdown "$*" 2>/dev/null; if [ "$DRY" = 1 ]; then echo "[dry] $*"; else echo "$(date '+%F %T') [audio] $*" | tr -d '\000' >> $LOG; fi; }
+PA(){ local t=$1; shift; timeout "$t" runuser -u $U -- env XDG_RUNTIME_DIR=$XR pactl "$@" 2>&1 </dev/null | tr -d '\000'; return ${PIPESTATUS[0]}; }
+snap(){ printf 'cards=[%s] adsp=[%s]' "$(cat /proc/asound/cards 2>/dev/null | tr '\n' ' ' | cut -c1-90)" \
+  "$(for d in /sys/bus/msm_subsys/devices/*; do [ -r $d/name ] && printf '%s=%s ' "$(cat $d/name)" "$(cat $d/state 2>/dev/null)"; done | cut -c1-120)"; }
+
+L "inicio $(snap)"
+if [ "$DRY" = 0 ]; then timeout 3 /usr/local/bin/s9-phone hangup >/dev/null 2>&1 </dev/null; L "hangup rc=$?"; else L "hangup (nao executado no dry)"; fi
+
+if ! PA 4 info >/dev/null; then L "pulse indisponivel: nada a fazer"; L "fim $(snap)"; exit 0; fi
+
+N=$(PA 4 list short sink-inputs | awk 'END{print NR}'); M=$(PA 4 list short source-outputs | awk 'END{print NR}')
+L "streams: playback=$N capture=$M"
+if [ "$DRY" = 0 ]; then
+  for id in $(PA 4 list short sink-inputs | awk '{print $1}'); do PA 3 kill-sink-input "$id" >/dev/null; done
+  for id in $(PA 4 list short source-outputs | awk '{print $1}'); do PA 3 kill-source-output "$id" >/dev/null; done
+fi
+
+CARD=$(PA 4 list short cards | awk '/droid_card/{print $2; exit}')
+if [ -n "$CARD" ]; then
+  L "card=$CARD: perfil mantido (nao grava off)"
+  if [ "$DRY" = 0 ]; then R="pulado: o module-card-restore gravaria off e o boot seguinte ficaria sem sinks"; rc=0; R=$(echo "$R" | tr '\n' ' '); L "set-card-profile rc=$rc ${R:-ok}"; fi
+else
+  L "sem card droid"
+fi
+
+for m in module-droid-card-29 module-droid-hidl; do
+  if PA 4 list short modules | awk '{print $2}' | grep -qx "$m"; then
+    L "descarregar $m"
+    if [ "$DRY" = 0 ]; then R=$(PA 5 unload-module "$m"); rc=$?; R=$(echo "$R" | tr '\n' ' '); L "unload $m rc=$rc ${R:-ok}"; fi
+  else
+    L "$m nao carregado"
+  fi
+done
+[ "$DRY" = 1 ] || sleep 1
+L "fim $(snap)"
+exit 0

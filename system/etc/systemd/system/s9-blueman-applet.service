@@ -1,0 +1,15 @@
+[Unit]
+Description=Bluetooth Blueman icon for S9 XFCE/Xwayland
+After=bluetooth.service s9-miral-nested.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+User=@S9_USER@
+Environment=HOME=@S9_HOME@
+ExecStart=/usr/local/sbin/s9-blueman-applet-launch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

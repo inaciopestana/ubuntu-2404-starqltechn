@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+TITLE="Powering off in 5 seconds"
+MESSAGE="Unplug the USB cable now!"
+
+# Agenda primeiro, para nao depender da conexao USB
+# ou da continuidade da sessao grafica.
+
+if ! sudo -n \
+    /usr/local/sbin/s9-poweroff-menu-schedule; then
+
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -u critical -t 10000 \
+            "Power off failed" \
+            "Could not schedule the power off."
+    fi
+
+    exit 1
+fi
+
+# Notificacao visual no XFCE.
+
+if command -v notify-send >/dev/null 2>&1; then
+
+    notify-send \
+        -u critical \
+        -t 5000 \
+        -a "Galaxy S9" \
+        "$TITLE" \
+        "$MESSAGE"
+
+elif command -v zenity >/dev/null 2>&1; then
+
+    zenity --warning \
+        --title="$TITLE" \
+        --text="$MESSAGE" \
+        --timeout=5 \
+        >/dev/null 2>&1 || true
+
+elif command -v xmessage >/dev/null 2>&1; then
+
+    xmessage \
+        -center \
+        -timeout 5 \
+        "$TITLE - $MESSAGE" \
+        >/dev/null 2>&1 || true
+fi

@@ -1,0 +1,5 @@
+#!/bin/sh
+
+# Mesmo controlador utilizado pelo botao fisico.
+exec /usr/bin/pkexec \
+    /usr/local/sbin/s9-internal-display-power toggle

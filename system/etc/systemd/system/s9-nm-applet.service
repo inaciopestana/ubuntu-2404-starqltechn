@@ -1,0 +1,16 @@
+[Unit]
+Description=Galaxy S9 NetworkManager tray applet
+Wants=NetworkManager.service
+After=NetworkManager.service s9-miral-nested.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/s9-nm-applet-autostart
+
+# Se Xwayland/MirAL cair, nm-applet perde a conexao X.
+# Reiniciamos o helper para ele descobrir a nova sessao.
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical.target

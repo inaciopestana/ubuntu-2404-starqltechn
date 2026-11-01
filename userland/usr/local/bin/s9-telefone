@@ -1,0 +1,962 @@
+#!/usr/bin/env python3
+"""s9-telefone: app de telefone para o S9 (GTK3). Fala com o s9-phoned por /run/s9-phone.sock."""
+import json, os, re, socket, subprocess, sys, time
+
+SOCK = '/run/s9-phone.sock'
+CFG_DIR = os.path.expanduser('~/.config/s9-telefone')
+SND_DIR = '/usr/local/share/s9-telefone'
+
+# ============================================================ utilidades (sem GTK)
+def digits(n):
+    return re.sub(r'\D', '', n or '')
+
+def num_key(n):
+    d = digits(n)
+    return d[-9:] if len(d) >= 8 else (n or '').strip()
+
+def fmt_number(n):
+    n = (n or '').strip()
+    if not n:
+        return 'Hidden number'
+    d = digits(n)
+    special = n.startswith(('+', '*', '#'))
+    if n.startswith('+55') and len(d) == 13:
+        return '+55 (%s) %s-%s' % (d[2:4], d[4:9], d[9:])
+    if n.startswith('+55') and len(d) == 12:
+        return '+55 (%s) %s-%s' % (d[2:4], d[4:8], d[8:])
+    if not special and len(d) == 11:
+        return '(%s) %s-%s' % (d[:2], d[2:7], d[7:])
+    if not special and len(d) == 10:
+        return '(%s) %s-%s' % (d[:2], d[2:6], d[6:])
+    return n
+
+def fmt_time(ts):
+    t = time.localtime(ts)
+    if time.strftime('%Y%m%d', t) == time.strftime('%Y%m%d'):
+        return time.strftime('%H:%M', t)
+    return time.strftime('%d/%m %H:%M', t)
+
+def fmt_dur(s):
+    s = int(s)
+    if s < 60:
+        return '%d s' % s
+    return '%d min %02d s' % (s // 60, s % 60)
+
+def fmt_clock(s):
+    s = max(0, int(s))
+    return '%02d:%02d' % (s // 60, s % 60) if s < 3600 else '%d:%02d:%02d' % (s // 3600, s % 3600 // 60, s % 60)
+
+def load_json(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+def save_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, path)
+
+class Contacts:
+    def __init__(self, path=None):
+        self.path = path or os.path.join(CFG_DIR, 'contatos.json')
+        data = load_json(self.path, [])
+        self.items = [c for c in data if isinstance(c, dict) and c.get('name') and c.get('number')]
+
+    def save(self):
+        save_json(self.path, self.items)
+
+    def name_for(self, number):
+        k = num_key(number)
+        if not k:
+            return None
+        for c in self.items:
+            if num_key(c['number']) == k:
+                return c['name']
+        return None
+
+    def upsert(self, old_number, name, number):
+        if old_number:
+            self.delete(old_number, save=False)
+        self.items = [c for c in self.items if num_key(c['number']) != num_key(number)]
+        self.items.append({'name': name.strip(), 'number': number.strip()})
+        self.save()
+
+    def delete(self, number, save=True):
+        self.items = [c for c in self.items if num_key(c['number']) != num_key(number)]
+        if save:
+            self.save()
+
+    def sorted(self):
+        return sorted(self.items, key=lambda c: c['name'].lower())
+
+class ReadState:
+    def __init__(self, path=None):
+        self.path = path or os.path.join(CFG_DIR, 'estado.json')
+        self.read = load_json(self.path, {}).get('read', {})
+
+    def mark(self, key, ts):
+        self.read[key] = ts
+        save_json(self.path, {'read': self.read})
+
+class Backend:
+    """Cliente do s9-phoned: um JSON por linha; reconecta sozinho."""
+    def __init__(self, on_event, on_conn, sock_path=SOCK):
+        self.on_event, self.on_conn, self.path = on_event, on_conn, sock_path
+        self.sock = None; self.buf = b''; self.nid = 1; self.pending = {}
+
+    def start(self):
+        self.connect()
+        GLib.timeout_add_seconds(3, self._retry)
+
+    def _retry(self):
+        if not self.sock:
+            self.connect()
+        return True
+
+    def connect(self):
+        if self.sock:
+            return
+        try:
+            s = socket.socket(socket.AF_UNIX)
+            s.settimeout(1)
+            s.connect(self.path)
+            s.settimeout(None)
+        except OSError:
+            return
+        self.sock = s; self.buf = b''
+        GLib.io_add_watch(s.fileno(), GLib.IO_IN | GLib.IO_HUP | GLib.IO_ERR, self._readable)
+        self.on_conn(True)
+
+    def _drop(self):
+        s, self.sock = self.sock, None
+        if s:
+            try: s.close()
+            except OSError: pass
+        pend, self.pending = self.pending, {}
+        for cb in pend.values():
+            if cb: cb({'ok': False, 'error': 'phone service stopped'})
+        self.on_conn(False)
+
+    def _readable(self, fd, cond):
+        s = self.sock
+        if not s or s.fileno() != fd:
+            return False
+        try:
+            data = s.recv(65536)
+        except OSError:
+            data = b''
+        if not data:
+            self._drop()
+            return False
+        self.buf += data
+        while b'\n' in self.buf:
+            line, self.buf = self.buf.split(b'\n', 1)
+            try:
+                m = json.loads(line.decode())
+            except ValueError:
+                continue
+            rid = m.get('id')
+            if rid is not None and rid in self.pending:
+                cb = self.pending.pop(rid)
+                if cb: cb(m)
+            elif 'event' in m:
+                self.on_event(m)
+        return True
+
+    def send(self, req, cb=None):
+        if not self.sock:
+            if cb: cb({'ok': False, 'error': 'phone service not running'})
+            return
+        req = dict(req); req['id'] = self.nid; self.pending[self.nid] = cb; self.nid += 1
+        try:
+            self.sock.sendall((json.dumps(req) + '\n').encode())
+        except OSError:
+            self._drop()
+
+# ---- audio da chamada (earpiece x alto-falante) pelo Pulse
+def run_pactl(*args):
+    r = subprocess.run(['pactl', *args], capture_output=True, text=True, timeout=6)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout).strip()[:200] or 'pactl failed')
+    return r.stdout
+
+def primary_sink():
+    sinks = json.loads(run_pactl('--format=json', 'list', 'sinks'))
+    for s in sinks:
+        if 'PRIMARY' in str(s.get('properties', {}).get('droid.flags', '')):
+            return s
+    for s in sinks:
+        if str(s.get('name', '')).startswith('sink.'):
+            return s
+    raise RuntimeError('phone sink not found')
+
+def _active_port(s):
+    a = s.get('active_port') or ''
+    return a.get('name', '') if isinstance(a, dict) else str(a)
+
+def route_call(speaker):
+    s = primary_sink()
+    names = [p['name'] for p in s.get('ports', [])]
+    want, frag = ('output-speaker', 'speaker') if speaker else ('output-earpiece', 'earpiece')
+    target = want if want in names else next((n for n in names if frag in n), None)
+    if not target:
+        raise RuntimeError('port "%s" not found (ports: %s)' % (frag, ', '.join(names)))
+    run_pactl('set-sink-port', s['name'], target)
+    return target
+
+def restore_port():
+    s = primary_sink()
+    act = _active_port(s)
+    if act and 'parking' not in act and 'earpiece' not in act:
+        return None
+    cands = [p for p in s.get('ports', [])
+             if not any(x in p['name'] for x in ('parking', 'earpiece')) and p.get('availability') != 'not available']
+    if not cands:
+        return None
+    best = max(cands, key=lambda p: p.get('priority', 0))
+    run_pactl('set-sink-port', s['name'], best['name'])
+    return best['name']
+
+class Ringer:
+    def __init__(self, ring, ding):
+        self.ring, self.ding, self.proc, self.tid = ring, ding, None, None
+
+    def _play(self, f):
+        if os.path.exists(f):
+            try:
+                return subprocess.Popen(['paplay', f], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError:
+                pass
+        return None
+
+    def _tick(self):
+        if self.proc is None or self.proc.poll() is not None:
+            self.proc = self._play(self.ring)
+        return True
+
+    def set(self, on):
+        if on and not self.tid:
+            self._tick(); self.tid = GLib.timeout_add(2500, self._tick)
+        elif not on and self.tid:
+            GLib.source_remove(self.tid); self.tid = None
+            if self.proc and self.proc.poll() is None:
+                self.proc.terminate()
+            self.proc = None
+
+    def once(self):
+        self._play(self.ding)
+
+class NoRinger:
+    # S9_PANEL_EMBED: a copia encaixada no painel nunca toca nem apita (quem toca e o app principal)
+    def set(self, on):
+        pass
+
+    def once(self):
+        pass
+
+# ============================================================ GUI
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk, Gdk, GLib, Gio, Pango
+
+CSS = b"""
+button.key { font-size: 22px; min-height: 58px; }
+entry.dialnum { font-size: 28px; min-height: 52px; }
+label.bigname { font-size: 26px; font-weight: bold; }
+label.timer { font-size: 22px; }
+label.dim { opacity: 0.65; }
+label.title2 { font-size: 18px; font-weight: bold; }
+button.callbtn { background-image: none; background-color: #1fa855; color: #fff; font-weight: bold; min-height: 56px; }
+button.endbtn { background-image: none; background-color: #d93025; color: #fff; font-weight: bold; min-height: 56px; }
+.bubble-in, .bubble-in label { background-image: none; background-color: #e4e6eb; color: #111; }
+.bubble-out, .bubble-out label { background-image: none; background-color: #0b84ff; color: #fff; }
+.bubble-in, .bubble-out { border-radius: 14px; padding: 6px 10px; }
+.bubble-in label, .bubble-out label { background-color: transparent; }
+label.missed { color: #d93025; }
+label.err { color: #d93025; font-weight: bold; }
+"""
+
+STATE_TXT = {'dialing': 'Dialing…', 'alerting': 'Calling…', 'active': 'In call', 'held': 'On hold',
+             'incoming': 'Incoming call', 'waiting': 'Call waiting', 'disconnected': 'Ending…'}
+PRIO = ['active', 'held', 'dialing', 'alerting', 'incoming', 'waiting']
+RES_TXT = {'perdida': 'Missed', 'atendida': 'Received', 'completada': 'Outgoing', 'nao_atendida': 'Unanswered'}
+SMS_TXT = {'pending': 'sending…', 'sent': 'sent', 'failed': 'failed', 'received': ''}
+SMS_NUM = re.compile(r'\+?[0-9]{3,20}')
+
+def clear(c):
+    for w in c.get_children():
+        c.remove(w)
+
+def label(text='', cls=None, xalign=0.0, bold=False, wrap=False, ell=False):
+    l = Gtk.Label(label=text, xalign=xalign)
+    if cls: l.get_style_context().add_class(cls)
+    if bold:
+        l.set_markup('<b>%s</b>' % GLib.markup_escape_text(text))
+    if wrap:
+        l.set_line_wrap(True); l.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR); l.set_max_width_chars(34)
+    if ell:
+        l.set_ellipsize(Pango.EllipsizeMode.END)
+    return l
+
+def button(text, cls=None, cb=None):
+    b = Gtk.Button(label=text)
+    if cls: b.get_style_context().add_class(cls)
+    if cb: b.connect('clicked', cb)
+    return b
+
+def vis(w, flag):
+    w.set_no_show_all(True)
+    w.set_visible(bool(flag))
+
+class Phone(Gtk.Window):
+    def __init__(self, app, live=True, embed=False):
+        super().__init__(title='Phone')
+        self.embed = embed
+        self.set_icon_name('call-start')
+        self.app = app
+        self.set_default_size(440, 760)
+        self.contacts = Contacts(); self.rstate = ReadState()
+        self.calls = {}; self.hist = []; self.sms = []
+        self.conn = False; self.modem = True
+        self.muted = False; self.speaker = False; self.had_calls = False; self._sync = False
+        self.conv_key = None; self.conv_number = ''
+        self.tick_id = None; self.toast_id = None; self.shown_for = set()
+        self.ringer = NoRinger() if embed else Ringer(os.path.join(SND_DIR, 'ringtone.wav'), os.path.join(SND_DIR, 'ding.wav'))
+        prov = Gtk.CssProvider(); prov.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.build()
+        self.connect('delete-event', lambda *a: (self.hide(), True)[1])
+        if app:
+            app.add_window(self)
+        self.backend = Backend(self.on_event, self.on_conn) if live else None
+        if self.backend:
+            self.backend.start()
+
+    # ---------------------------------------------------------- construção
+    def build(self):
+        self.root = Gtk.Stack()
+        self.add(self.root)
+        main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.banner = label('', 'err', 0.5)
+        self.banner.set_margin_top(4); vis(self.banner, False)
+        self.tabs = Gtk.Stack(); self.tabs.set_vexpand(True)
+        self.tabs.add_titled(self.build_dialer(), 'teclado', 'Keypad')
+        self.tabs.add_titled(self.build_recents(), 'recentes', 'Recents')
+        self.tabs.add_titled(self.build_messages(), 'mensagens', 'Messages')
+        self.tabs.add_titled(self.build_contacts(), 'contatos', 'Contacts')
+        self.toastl = label('', 'err', 0.5); vis(self.toastl, False)
+        sw = Gtk.StackSwitcher(); sw.set_stack(self.tabs); sw.set_halign(Gtk.Align.CENTER); sw.set_margin_bottom(4)
+        main.pack_start(self.banner, False, False, 0)
+        main.pack_start(self.tabs, True, True, 0)
+        main.pack_start(self.toastl, False, False, 2)
+        main.pack_start(sw, False, False, 0)
+        self.root.add_named(main, 'main')
+        self.root.add_named(self.build_callpage(), 'call')
+
+    def scrolled(self, child):
+        s = Gtk.ScrolledWindow(); s.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        s.set_vexpand(True); s.add(child)
+        return s
+
+    def header(self, title, extra=None):
+        h = Gtk.Box(spacing=8); h.set_margin_start(12); h.set_margin_end(12); h.set_margin_top(8); h.set_margin_bottom(6)
+        h.pack_start(label(title, 'title2'), True, True, 0)
+        if extra: h.pack_end(extra, False, False, 0)
+        return h
+
+    def build_dialer(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_start(16); box.set_margin_end(16); box.set_margin_top(14); box.set_margin_bottom(8)
+        self.num_entry = Gtk.Entry(); self.num_entry.set_alignment(0.5)
+        self.num_entry.set_placeholder_text('Enter number')
+        self.num_entry.get_style_context().add_class('dialnum')
+        self.num_entry.connect('insert-text', self.on_num_insert)
+        self.num_entry.connect('changed', self.on_num_changed)
+        self.num_entry.connect('activate', lambda *a: self.dial(self.num_entry.get_text()))
+        self.num_hint = label(' ', 'dim', 0.5)
+        box.pack_start(self.num_entry, False, False, 0)
+        box.pack_start(self.num_hint, False, False, 0)
+        grid = Gtk.Grid(row_spacing=8, column_spacing=8, row_homogeneous=True, column_homogeneous=True)
+        grid.set_vexpand(True)
+        for i, k in enumerate('123456789*0#'):
+            grid.attach(button(k, 'key', lambda b, k=k: self.type_key(k)), i % 3, i // 3, 1, 1)
+        grid.attach(button('+', 'key', lambda b: self.type_key('+')), 0, 4, 1, 1)
+        grid.attach(button('Call', 'callbtn', lambda b: self.dial(self.num_entry.get_text())), 1, 4, 1, 1)
+        back = button('Delete', 'key')
+        back.connect('button-press-event', self.back_press); back.connect('button-release-event', self.back_release)
+        grid.attach(back, 2, 4, 1, 1)
+        box.pack_start(grid, True, True, 0)
+        self._back_tid = None; self._back_long = False
+        return box
+
+    def build_recents(self):
+        self.recents_box = Gtk.ListBox(); self.recents_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        v.pack_start(self.header('Recents'), False, False, 0)
+        v.pack_start(self.scrolled(self.recents_box), True, True, 0)
+        return v
+
+    def build_messages(self):
+        self.msgstack = Gtk.Stack()
+        lst = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        lst.pack_start(self.header('Messages', button('New', None, lambda b: self.new_message())), False, False, 0)
+        self.conv_list = Gtk.ListBox(); self.conv_list.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.conv_list.connect('row-activated', self.on_conv_row)
+        lst.pack_start(self.scrolled(self.conv_list), True, True, 0)
+        conv = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        top = Gtk.Box(spacing=8); top.set_margin_start(8); top.set_margin_end(8); top.set_margin_top(8); top.set_margin_bottom(6)
+        top.pack_start(button('Back', None, lambda b: self.close_conv()), False, False, 0)
+        self.conv_title = label('', 'title2'); self.conv_title.set_ellipsize(Pango.EllipsizeMode.END)
+        top.pack_start(self.conv_title, True, True, 0)
+        top.pack_end(button('Call', None, lambda b: self.dial(self.conv_number)), False, False, 0)
+        self.bubbles = Gtk.ListBox(); self.bubbles.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.bubbles_sw = self.scrolled(self.bubbles)
+        send = Gtk.Box(spacing=6); send.set_margin_start(8); send.set_margin_end(8); send.set_margin_top(6); send.set_margin_bottom(6)
+        self.sms_entry = Gtk.Entry(); self.sms_entry.set_placeholder_text('Message')
+        self.sms_entry.connect('activate', lambda *a: self.send_sms())
+        self.sms_btn = button('Send', None, lambda b: self.send_sms())
+        send.pack_start(self.sms_entry, True, True, 0); send.pack_start(self.sms_btn, False, False, 0)
+        conv.pack_start(top, False, False, 0); conv.pack_start(self.bubbles_sw, True, True, 0); conv.pack_start(send, False, False, 0)
+        self.msgstack.add_named(lst, 'list'); self.msgstack.add_named(conv, 'conv')
+        return self.msgstack
+
+    def build_contacts(self):
+        self.contacts_box = Gtk.ListBox(); self.contacts_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        v.pack_start(self.header('Contacts', button('New', None, lambda b: self.edit_contact(None))), False, False, 0)
+        v.pack_start(self.scrolled(self.contacts_box), True, True, 0)
+        if not self.embed:
+            quit_b = button('Quit app (stops incoming-call alerts)', None, lambda b: self.quit_app())
+            quit_b.set_margin_start(12); quit_b.set_margin_end(12); quit_b.set_margin_bottom(6)
+            v.pack_start(quit_b, False, False, 0)
+        self.rebuild_contacts()
+        return v
+
+    def build_callpage(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_margin_start(20); box.set_margin_end(20); box.set_margin_top(24); box.set_margin_bottom(20)
+        self.c_state = label('', 'dim', 0.5); self.c_name = label('', 'bigname', 0.5, wrap=True)
+        self.c_name.set_justify(Gtk.Justification.CENTER)
+        self.c_num = label('', 'dim', 0.5); self.c_timer = label('', 'timer', 0.5)
+        box.pack_start(Gtk.Box(), True, True, 0)
+        for w in (self.c_state, self.c_name, self.c_num, self.c_timer):
+            box.pack_start(w, False, False, 0)
+        box.pack_start(Gtk.Box(), True, True, 0)
+        self.pad_rev = Gtk.Revealer(); self.pad_rev.set_reveal_child(False)
+        g = Gtk.Grid(row_spacing=6, column_spacing=6, row_homogeneous=True, column_homogeneous=True)
+        for i, k in enumerate('123456789*0#'):
+            g.attach(button(k, 'key', lambda b, k=k: self.send_dtmf(k)), i % 3, i // 3, 1, 1)
+        self.pad_rev.add(g)
+        box.pack_start(self.pad_rev, False, False, 0)
+        self.c_others = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.pack_start(self.c_others, False, False, 0)
+        self.ctl = Gtk.Box(spacing=8, homogeneous=True)
+        self.t_mute = Gtk.ToggleButton(label='Mute'); self.t_spk = Gtk.ToggleButton(label='Speaker')
+        self.t_pad = Gtk.ToggleButton(label='Keypad')
+        self.t_mute.connect('toggled', self.on_mute); self.t_spk.connect('toggled', self.on_speaker)
+        self.t_pad.connect('toggled', lambda b: self.pad_rev.set_reveal_child(b.get_active()))
+        for t in (self.t_mute, self.t_spk, self.t_pad):
+            t.set_size_request(-1, 52); self.ctl.pack_start(t, True, True, 0)
+        box.pack_start(self.ctl, False, False, 0)
+        act = Gtk.Box(spacing=10, homogeneous=True)
+        self.b_answer = button('Answer', 'callbtn', lambda b: self.answer_primary())
+        self.b_reject = button('Decline', 'endbtn', lambda b: self.hangup_primary())
+        self.b_hang = button('Hang up', 'endbtn', lambda b: self.hangup_primary())
+        for b in (self.b_answer, self.b_reject, self.b_hang):
+            vis(b, False); act.pack_start(b, True, True, 0)
+        box.pack_start(act, False, False, 0)
+        return box
+
+    # ---------------------------------------------------------- ações
+    def toast(self, msg):
+        self.toastl.set_text(msg); vis(self.toastl, True)
+        if self.toast_id: GLib.source_remove(self.toast_id)
+        self.toast_id = GLib.timeout_add_seconds(5, self._toast_off)
+
+    def _toast_off(self):
+        self.toast_id = None; vis(self.toastl, False)
+        return False
+
+    ERR = (('numero invalido', 'Invalid number'), ('texto vazio ou longo demais', 'Empty or too long text'),
+           ('digitos invalidos', 'Invalid digits'), ('nenhuma chamada', 'No call'),
+           ('modem offline', 'Modem offline'), ('comando desconhecido', 'Unknown command'))
+
+    def tr_err(self, e):
+        e = str(e)
+        for pt, en in self.ERR:
+            if pt in e: return en
+        return e
+
+    def reply(self, what):
+        def cb(m):
+            if not m.get('ok'):
+                self.toast('%s: %s' % (what, self.tr_err(m.get('error'))))
+        return cb
+
+    def on_num_insert(self, entry, text, length, pos):
+        if not re.fullmatch(r'[0-9+*#]*', text):
+            entry.stop_emission_by_name('insert-text')
+
+    def on_num_changed(self, entry):
+        n = entry.get_text()
+        self.num_hint.set_text((self.contacts.name_for(n) if n else None) or ' ')
+
+    def type_key(self, k):
+        self.num_entry.set_text(self.num_entry.get_text() + k)
+        self.num_entry.set_position(-1)
+
+    def back_press(self, w, ev):
+        self._back_long = False
+        self._back_tid = GLib.timeout_add(600, self._back_clear)
+        return False
+
+    def _back_clear(self):
+        self._back_tid = None; self._back_long = True
+        self.num_entry.set_text('')
+        return False
+
+    def back_release(self, w, ev):
+        if self._back_tid:
+            GLib.source_remove(self._back_tid); self._back_tid = None
+        if not self._back_long:
+            self.num_entry.set_text(self.num_entry.get_text()[:-1])
+        return False
+
+    def prefill(self, number):
+        self.num_entry.set_text(re.sub(r'[^0-9+*#]', '', number or '')); self.tabs.set_visible_child_name('teclado')
+
+    def dial(self, number):
+        number = (number or '').strip()
+        if not number:
+            self.toast('Enter a number'); return
+        self.backend.send({'cmd': 'dial', 'number': number}, self.reply('Call'))
+
+    def live_calls(self):
+        return [c for c in self.calls.values() if c['state'] != 'disconnected']
+
+    def primary_call(self):
+        live = self.live_calls()
+        for st in PRIO:
+            for c in live:
+                if c['state'] == st: return c
+        return None
+
+    def answer_primary(self):
+        c = self.primary_call()
+        if c: self.backend.send({'cmd': 'answer', 'path': c['path']}, self.reply('Answer'))
+
+    def hangup_primary(self):
+        c = self.primary_call()
+        if c: self.backend.send({'cmd': 'hangup', 'path': c['path']}, self.reply('Hang up'))
+
+    def send_dtmf(self, k):
+        self.backend.send({'cmd': 'dtmf', 'digits': k}, self.reply('Key'))
+
+    def on_mute(self, b):
+        if self._sync: return
+        self.muted = b.get_active()
+        self.backend.send({'cmd': 'mute', 'on': self.muted}, self.reply('Mute'))
+
+    def on_speaker(self, b):
+        if self._sync: return
+        want = b.get_active()
+        try:
+            route_call(want); self.speaker = want
+        except Exception as e:
+            self.toast('Speaker: %s' % e)
+            self._sync = True; b.set_active(self.speaker); self._sync = False
+
+    def restore_audio_route(self):
+        try:
+            restore_port()
+        except Exception as e:
+            self.toast('Audio: %s' % e)
+        return False
+
+    # ---------------------------------------------------------- eventos / sincronização
+    def on_conn(self, ok):
+        self.conn = ok
+        if ok:
+            self.refresh_status(); self.refresh_hist(); self.refresh_sms()
+        self.update_banner()
+
+    def update_banner(self):
+        if not self.conn:
+            txt = 'Phone service not running — reconnecting…'
+        elif not self.modem:
+            txt = 'No modem/network (ofono offline)'
+        else:
+            txt = ''
+        self.banner.set_text(txt); vis(self.banner, bool(txt))
+
+    def on_event(self, ev):
+        t = ev.get('event')
+        if t == 'call':
+            self.calls[ev['path']] = {k: ev.get(k) for k in ('path', 'number', 'state', 'incoming', 'since')}
+            if ev['state'] == 'disconnected':
+                self.calls.pop(ev['path'], None)
+            self.after_calls_changed()
+        elif t == 'call_end':
+            self.refresh_status(); self.refresh_hist()
+        elif t in ('sms_in', 'sms_out', 'sms_state'):
+            if t == 'sms_in':
+                self.ringer.once()
+            self.refresh_sms()
+
+    def refresh_status(self):
+        def cb(m):
+            if not m.get('ok'): return
+            self.modem = bool(m.get('online'))
+            self.calls = {c['path']: c for c in m.get('calls', [])}
+            self.update_banner(); self.after_calls_changed()
+        self.backend.send({'cmd': 'status'}, cb)
+
+    def refresh_hist(self):
+        def cb(m):
+            if m.get('ok'):
+                self.hist = m.get('calls', []); self.rebuild_recents()
+        self.backend.send({'cmd': 'calls_list', 'limit': 300}, cb)
+
+    def refresh_sms(self):
+        def cb(m):
+            if m.get('ok'):
+                self.sms = m.get('messages', []); self.rebuild_convs()
+                if self.conv_key is not None: self.rebuild_bubbles()
+        self.backend.send({'cmd': 'sms_list', 'limit': 5000}, cb)
+
+    # ---------------------------------------------------------- chamada
+    def name_of(self, number):
+        return self.contacts.name_for(number) or fmt_number(number)
+
+    def after_calls_changed(self):
+        live = self.live_calls()
+        states = [c['state'] for c in live]
+        ringing = ('incoming' in states or 'waiting' in states)
+        busy = any(s in states for s in ('active', 'held', 'dialing', 'alerting'))
+        self.ringer.set(ringing and not busy)
+        if live:
+            self.had_calls = True
+            self.update_call_ui()
+            self.root.set_visible_child_name('call')
+            for c in live:
+                if c['state'] in ('incoming', 'waiting') and c['path'] not in self.shown_for:
+                    self.shown_for.add(c['path']); self.show_main()
+            if not self.tick_id:
+                self.tick_id = GLib.timeout_add_seconds(1, self.tick)
+        else:
+            self.root.set_visible_child_name('main')
+            if self.had_calls:
+                self.had_calls = False; self.call_finished()
+
+    def call_finished(self):
+        self.shown_for.clear()
+        self._sync = True
+        for t in (self.t_mute, self.t_spk, self.t_pad): t.set_active(False)
+        self._sync = False
+        if self.muted:
+            self.muted = False; self.backend.send({'cmd': 'mute', 'on': False})
+        self.speaker = False
+        GLib.timeout_add_seconds(2, self.restore_audio_route)
+
+    def tick(self):
+        if not self.live_calls():
+            self.tick_id = None
+            return False
+        self.update_call_ui()
+        return True
+
+    def update_call_ui(self):
+        c = self.primary_call()
+        if not c: return
+        num = c.get('number') or ''
+        name = self.contacts.name_for(num)
+        self.c_state.set_text(STATE_TXT.get(c['state'], c['state']))
+        self.c_name.set_text(name or fmt_number(num))
+        self.c_num.set_text(fmt_number(num) if name else ''); vis(self.c_num, bool(name))
+        if c['state'] == 'active' and c.get('since'):
+            self.c_timer.set_text(fmt_clock(time.time() - c['since']))
+        else:
+            self.c_timer.set_text(' ')
+        ringing = c['state'] in ('incoming', 'waiting')
+        vis(self.b_answer, ringing and c['state'] == 'incoming'); vis(self.b_reject, ringing); vis(self.b_hang, not ringing)
+        vis(self.ctl, not ringing)
+        if ringing: self.pad_rev.set_reveal_child(False)
+        clear(self.c_others)
+        for o in self.live_calls():
+            if o['path'] == c['path']: continue
+            row = Gtk.Box(spacing=8)
+            row.pack_start(label('%s — %s' % (self.name_of(o.get('number')), STATE_TXT.get(o['state'], o['state'])), None, 0.0, ell=True), True, True, 0)
+            if o['state'] in ('incoming', 'waiting'):
+                row.pack_end(button('Answer', 'callbtn', lambda b, p=o['path']: self.backend.send({'cmd': 'answer', 'path': p}, self.reply('Answer'))), False, False, 0)
+            row.pack_end(button('End', 'endbtn', lambda b, p=o['path']: self.backend.send({'cmd': 'hangup', 'path': p}, self.reply('End'))), False, False, 0)
+            self.c_others.pack_start(row, False, False, 0)
+        self.c_others.show_all()
+
+    # ---------------------------------------------------------- recentes
+    def rebuild_recents(self):
+        clear(self.recents_box)
+        for r in reversed(self.hist[-200:]):
+            row = Gtk.ListBoxRow(); row.set_activatable(False)
+            h = Gtk.Box(spacing=8); h.set_margin_start(12); h.set_margin_end(12); h.set_margin_top(6); h.set_margin_bottom(6)
+            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            n = label(self.name_of(r.get('number')), 'missed' if r.get('result') == 'perdida' else None, ell=True)
+            sub = [RES_TXT.get(r.get('result'), r.get('result', '')), fmt_time(r['ts'])]
+            if r.get('duration'): sub.append(fmt_dur(r['duration']))
+            v.pack_start(n, False, False, 0); v.pack_start(label(' · '.join(sub), 'dim'), False, False, 0)
+            h.pack_start(v, True, True, 0)
+            num = r.get('number') or ''
+            if num:
+                h.pack_end(button('SMS', None, lambda b, num=num: self.open_conv_for(num)), False, False, 0)
+                h.pack_end(button('Call', None, lambda b, num=num: self.dial(num)), False, False, 0)
+            row.add(h); self.recents_box.add(row)
+        self.recents_box.show_all()
+
+    # ---------------------------------------------------------- mensagens
+    def conversations(self):
+        groups = {}
+        for m in self.sms:
+            groups.setdefault(num_key(m['number']), []).append(m)
+        convs = []
+        for k, ms in groups.items():
+            ms.sort(key=lambda m: m['ts']); convs.append((k, ms))
+        convs.sort(key=lambda kv: kv[1][-1]['ts'], reverse=True)
+        return convs
+
+    def unread(self, key, ms):
+        last = self.rstate.read.get(key, 0)
+        return sum(1 for m in ms if m['dir'] == 'in' and m['ts'] > last)
+
+    def rebuild_convs(self):
+        clear(self.conv_list)
+        total = 0
+        for k, ms in self.conversations():
+            un = self.unread(k, ms) if k != self.conv_key else 0
+            total += un
+            last = ms[-1]
+            row = Gtk.ListBoxRow(); row.set_name('conv:' + k)
+            h = Gtk.Box(spacing=8); h.set_margin_start(12); h.set_margin_end(12); h.set_margin_top(6); h.set_margin_bottom(6)
+            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            name = self.name_of(ms[-1]['number'])
+            v.pack_start(label(name + (' (%d)' % un if un else ''), None, bold=bool(un), ell=True), False, False, 0)
+            v.pack_start(label(('You: ' if last['dir'] == 'out' else '') + last['text'].replace('\n', ' '), 'dim', ell=True), False, False, 0)
+            h.pack_start(v, True, True, 0)
+            h.pack_end(label(fmt_time(last['ts']), 'dim'), False, False, 0)
+            row.add(h); self.conv_list.add(row)
+        self.conv_list.show_all()
+        title = 'Messages (%d)' % total if total else 'Messages'
+        self.tabs.child_set_property(self.msgstack, 'title', title)
+
+    def on_conv_row(self, lb, row):
+        k = row.get_name()[5:]
+        ms = sorted([m for m in self.sms if num_key(m['number']) == k], key=lambda m: m['ts'])
+        if not ms: return
+        ins = [m for m in ms if m['dir'] == 'in']
+        self.open_conv(k, (ins[-1] if ins else ms[-1])['number'])
+
+    def open_conv_for(self, number):
+        self.tabs.set_visible_child_name('mensagens')
+        self.open_conv(num_key(number), number)
+
+    def open_conv(self, key, number):
+        self.conv_key, self.conv_number = key, number
+        self.rstate.mark(key, time.time())
+        self.conv_title.set_text(self.name_of(number))
+        ok = bool(SMS_NUM.fullmatch(number or ''))
+        self.sms_entry.set_sensitive(ok); self.sms_btn.set_sensitive(ok)
+        self.sms_entry.set_placeholder_text('Message' if ok else 'Cannot reply to this sender')
+        self.rebuild_bubbles(); self.rebuild_convs()
+        self.msgstack.set_visible_child_name('conv')
+
+    def close_conv(self):
+        self.conv_key = None
+        self.rebuild_convs()
+        self.msgstack.set_visible_child_name('list')
+
+    def rebuild_bubbles(self):
+        clear(self.bubbles)
+        ms = sorted([m for m in self.sms if num_key(m['number']) == self.conv_key], key=lambda m: m['ts'])
+        for m in ms:
+            out = m['dir'] == 'out'
+            row = Gtk.ListBoxRow(); row.set_activatable(False)
+            o = Gtk.Box(); o.set_margin_start(8); o.set_margin_end(8); o.set_margin_top(3); o.set_margin_bottom(3)
+            b = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            b.get_style_context().add_class('bubble-out' if out else 'bubble-in')
+            t = label(m['text'], None, 0.0, wrap=True); t.set_selectable(True)
+            meta = fmt_time(m['ts']) + ((' · ' + SMS_TXT.get(m.get('state'), m.get('state', ''))) if out else '')
+            b.pack_start(t, False, False, 0); b.pack_start(label(meta, 'dim', 1.0), False, False, 0)
+            if out: o.pack_end(b, False, False, 0)
+            else: o.pack_start(b, False, False, 0)
+            row.add(o); self.bubbles.add(row)
+        self.bubbles.show_all()
+        if self.conv_key is not None and ms:
+            self.rstate.mark(self.conv_key, time.time())
+        GLib.timeout_add(120, self._scroll_end)
+
+    def _scroll_end(self):
+        a = self.bubbles_sw.get_vadjustment()
+        a.set_value(a.get_upper() - a.get_page_size())
+        return False
+
+    def send_sms(self):
+        t = self.sms_entry.get_text().strip()
+        if not t or not self.conv_number: return
+        def cb(m):
+            if m.get('ok'): self.sms_entry.set_text('')
+            else: self.toast('SMS: %s' % self.tr_err(m.get('error')))
+        self.backend.send({'cmd': 'sms_send', 'number': self.conv_number, 'text': t}, cb)
+
+    def new_message(self):
+        d = Gtk.Dialog(title='New message', transient_for=self, modal=True)
+        d.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Open', Gtk.ResponseType.OK)
+        e = Gtk.Entry(); e.set_placeholder_text('Number (with area code)'); e.set_activates_default(True)
+        d.set_default_response(Gtk.ResponseType.OK)
+        a = d.get_content_area(); a.set_spacing(8); a.set_border_width(12); a.pack_start(e, False, False, 0)
+        d.show_all()
+        if d.run() == Gtk.ResponseType.OK and e.get_text().strip():
+            n = re.sub(r'[^0-9+]', '', e.get_text())
+            d.destroy(); self.open_conv_for(n)
+        else:
+            d.destroy()
+
+    # ---------------------------------------------------------- contatos
+    def rebuild_contacts(self):
+        clear(self.contacts_box)
+        for c in self.contacts.sorted():
+            row = Gtk.ListBoxRow(); row.set_activatable(False)
+            h = Gtk.Box(spacing=8); h.set_margin_start(12); h.set_margin_end(12); h.set_margin_top(6); h.set_margin_bottom(6)
+            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            v.pack_start(label(c['name'], None, bold=True, ell=True), False, False, 0)
+            v.pack_start(label(fmt_number(c['number']), 'dim'), False, False, 0)
+            h.pack_start(v, True, True, 0)
+            h.pack_end(button('Edit', None, lambda b, c=c: self.edit_contact(c)), False, False, 0)
+            h.pack_end(button('SMS', None, lambda b, n=c['number']: self.open_conv_for(n)), False, False, 0)
+            h.pack_end(button('Call', None, lambda b, n=c['number']: self.dial(n)), False, False, 0)
+            row.add(h); self.contacts_box.add(row)
+        self.contacts_box.show_all()
+
+    def edit_contact(self, c):
+        d = Gtk.Dialog(title='Contact' if c else 'New contact', transient_for=self, modal=True)
+        d.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Save', Gtk.ResponseType.OK)
+        if c: d.add_button('Delete', Gtk.ResponseType.REJECT)
+        en = Gtk.Entry(); en.set_placeholder_text('Name'); en.set_text(c['name'] if c else '')
+        ep = Gtk.Entry(); ep.set_placeholder_text('Number'); ep.set_text(c['number'] if c else '')
+        a = d.get_content_area(); a.set_spacing(8); a.set_border_width(12)
+        a.pack_start(en, False, False, 0); a.pack_start(ep, False, False, 0)
+        d.show_all()
+        r = d.run()
+        name, num = en.get_text().strip(), re.sub(r'[^0-9+*#]', '', ep.get_text())
+        d.destroy()
+        if r == Gtk.ResponseType.OK and name and num:
+            self.contacts.upsert(c['number'] if c else None, name, num)
+        elif r == Gtk.ResponseType.REJECT and c:
+            self.contacts.delete(c['number'])
+        else:
+            return
+        self.rebuild_contacts(); self.rebuild_recents(); self.rebuild_convs()
+
+    # ---------------------------------------------------------- janela
+    def show_main(self):
+        if self.embed:
+            return
+        self.show_all(); self.present()
+
+    def quit_app(self):
+        if self.app: self.app.quit()
+        else: Gtk.main_quit()
+
+class App(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id='br.s9.Telefone', flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        self.win = None
+
+    def do_startup(self):
+        Gtk.Application.do_startup(self)
+        self.hold()
+
+    def do_command_line(self, cl):
+        args = cl.get_arguments()[1:]
+        if not self.win:
+            self.win = Phone(self)
+        if '--dial' in args and args.index('--dial') + 1 < len(args):
+            self.win.prefill(args[args.index('--dial') + 1])
+        if '--background' not in args:
+            self.win.show_main()
+        return 0
+
+def selftest():
+    w = Phone(None, live=True)
+    w.contacts.items = [{'name': 'Fulano', 'number': '+5521999990000'}]
+    w.hist = [{'ts': time.time() - 60, 'number': '+5521999990000', 'incoming': True, 'result': 'perdida', 'duration': 0},
+              {'ts': time.time() - 3600, 'number': '*555', 'incoming': False, 'result': 'completada', 'duration': 26}]
+    w.sms = [{'id': 'a', 'ts': time.time() - 90, 'dir': 'in', 'number': '+5521999990000', 'text': 'oi, tudo bem?', 'state': 'received'},
+             {'id': 'b', 'ts': time.time() - 30, 'dir': 'out', 'number': '21999990000', 'text': 'tudo sim', 'state': 'sent'}]
+    w.rebuild_recents(); w.rebuild_contacts(); w.rebuild_convs()
+    w.open_conv('999990000', '+5521999990000'); w.close_conv()
+    w.calls = {'/x': {'path': '/x', 'number': '+5521999990000', 'state': 'incoming', 'incoming': True, 'since': None}}
+    w.update_call_ui()
+    w.calls['/x'].update(state='active', since=time.time() - 75); w.update_call_ui(); w.tick()
+    w.calls['/y'] = {'path': '/y', 'number': '*555', 'state': 'waiting', 'incoming': True, 'since': None}; w.update_call_ui()
+    w.calls = {}
+    print('interface: ok')
+    try:
+        s = primary_sink()
+        print('call sink: %s | active port: %s | ports: %s' % (
+            s['name'], _active_port(s), ', '.join('%s[%s,%s]' % (p['name'], p.get('priority'), p.get('availability')) for p in s.get('ports', []))))
+    except Exception as e:
+        print('call sink: ERROR', e)
+    res = {}
+    def done():
+        print('backend: connected=%s modem_online=%s calls_in_history=%d sms=%d' % (w.conn, w.modem, len(w.hist), len(w.sms)))
+        Gtk.main_quit(); return False
+    GLib.timeout_add(2500, done)
+    Gtk.main()
+    return 0
+
+def embed_main():
+    """S9_PANEL_EMBED: janela sem moldura que o painel S9 embute por XEmbed (Gtk.Socket).
+    stdout: 'XID <n>' quando a janela existe. stdin: 'show' | 'tab <teclado|recentes|mensagens|contatos>' | 'quit'."""
+    gi.require_version('GdkX11', '3.0')
+    from gi.repository import GdkX11  # noqa: F401  (faz o Gdk.Window virar X11Window com get_xid)
+    w = Phone(None, live=True, embed=True)
+    w.set_decorated(False)
+    w.set_default_size(440, 760)
+    w.get_child().show_all()
+    w.realize()
+    Gdk.Display.get_default().sync()  # a janela precisa existir no servidor X antes de o painel agarra-la
+    print('XID %d' % w.get_window().get_xid(), flush=True)
+
+    def on_stdin(fd, cond):
+        data = os.read(fd, 4096) if cond & GLib.IO_IN else b''
+        if not data:
+            Gtk.main_quit()
+            return False
+        for line in data.decode('utf-8', 'ignore').splitlines():
+            p = line.split()
+            if not p:
+                continue
+            if p[0] == 'show':
+                w.show()
+            elif p[0] == 'tab' and len(p) > 1 and p[1] in ('teclado', 'recentes', 'mensagens', 'contatos'):
+                w.tabs.set_visible_child_name(p[1])
+            elif p[0] == 'quit':
+                Gtk.main_quit()
+                return False
+        return True
+
+    GLib.io_add_watch(sys.stdin.fileno(), GLib.IO_IN | GLib.IO_HUP | GLib.IO_ERR, on_stdin)
+    Gtk.main()
+    return 0
+
+def main():
+    if '--selftest' in sys.argv:
+        return selftest()
+    if '--embed' in sys.argv:
+        return embed_main()
+    return App().run(sys.argv)
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+echo "S9_AUDIO_WAIT_ALSA_START=1"
+
+for i in $(seq 1 60); do
+
+    if [ -c /dev/snd/controlC0 ] &&
+       grep -q 'sdm845-tavil-snd-card' /proc/asound/cards; then
+
+        echo "S9_AUDIO_ALSA_READY=1"
+        echo "S9_AUDIO_WAIT_ITERATION=$i"
+        exit 0
+    fi
+
+    if (( i % 5 == 1 )); then
+        echo "S9_AUDIO_WAIT_ALSA_ATTEMPT=$i"
+    fi
+
+    sleep 3
+done
+
+echo "S9_AUDIO_ALSA_TIMEOUT=1"
+cat /proc/asound/cards >&2
+exit 1

@@ -1,0 +1,13 @@
+[Unit]
+Description=S9 screen cast (SRT, encrypted, waits for a viewer)
+After=s9-miral-nested.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/s9-cast run
+Restart=on-failure
+RestartSec=3
+Nice=5
+CPUAccounting=yes
+KillMode=control-group
+TimeoutStopSec=8

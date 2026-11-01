@@ -1,0 +1,5 @@
+[Unit]
+Description=Save/restore the current time (s9-clock-keep tick)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/s9-clock-keep tick

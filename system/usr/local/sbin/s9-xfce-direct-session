@@ -1,0 +1,76 @@
+#!/bin/sh
+
+LOG=/var/log/s9-xfce-direct-session.log
+exec >>"$LOG" 2>&1
+
+main()
+{
+    echo
+    echo "============================================================"
+    echo "S9 XFCE DIRECT SESSION"
+    date
+    echo "pid=$$"
+    echo "DISPLAY=${DISPLAY:-<VAZIO>}"
+    echo "============================================================"
+
+    if [ -z "${DISPLAY:-}" ]; then
+        echo "ERRO: DISPLAY nao definido"
+        return 40
+    fi
+
+
+    echo
+    echo "===== AUTORIZANDO USUARIO NO XWAYLAND ====="
+
+    if command -v xhost >/dev/null 2>&1; then
+        xhost +SI:localuser:@S9_USER@ || true
+    fi
+
+    echo
+    echo "===== DISPLAY HOTPLUG WATCH ====="
+
+    if [ -e /etc/s9-task12-disable-xrandr ]; then
+        echo "Task12C: XRandR watcher disabled"
+    else
+        pkill -f "/usr/local/sbin/s9-display-watch" \
+            2>/dev/null || true
+
+        nohup /usr/local/sbin/s9-display-watch \
+            >>/var/log/s9-display-watch.log \
+            2>&1 </dev/null &
+    fi
+
+    echo
+    echo "===== PREPARANDO XDG_RUNTIME_DIR UID 1000 ====="
+
+    install \
+        -d \
+        -o @S9_USER@ \
+        -g @S9_USER@ \
+        -m 0700 \
+        /run/user/1000
+
+    echo
+    ls -ld /run/user/1000
+
+    echo
+    echo "===== INICIANDO XFCE COMO UID 1000 ====="
+
+    exec /usr/sbin/runuser \
+        -u @S9_USER@ \
+        -- \
+        /usr/bin/env \
+        -i \
+        HOME=@S9_HOME@ \
+        USER=@S9_USER@ \
+        LOGNAME=@S9_USER@ \
+        SHELL=/bin/bash \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        DISPLAY="$DISPLAY" \
+        XDG_RUNTIME_DIR=/run/user/1000 \
+        XDG_SESSION_TYPE=x11 \
+        LANG="${LANG:-C.UTF-8}" \
+        /usr/local/sbin/s9-xfce-user-session
+}
+
+main "$@"

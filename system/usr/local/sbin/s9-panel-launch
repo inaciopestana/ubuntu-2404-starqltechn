@@ -1,0 +1,18 @@
+#!/bin/bash
+# espera o xfce4-panel do usuario, copia o ambiente grafico dele e roda o painel como ele
+U=@S9_USER@
+PID=""
+for i in $(seq 1 180); do
+  PID=$(pgrep -u "$U" -x xfce4-panel | head -1)
+  [ -n "$PID" ] && break
+  sleep 2
+done
+[ -n "$PID" ] || { echo "xfce4-panel nao apareceu"; exit 1; }
+sleep 3
+ENVS=()
+for v in DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP XDG_SESSION_TYPE; do
+  val=$(tr '\0' '\n' < /proc/$PID/environ 2>/dev/null | grep -m1 "^$v=" | cut -d= -f2-)
+  [ -n "$val" ] && ENVS+=("$v=$val")
+done
+echo "s9-panel-launch: ambiente copiado do xfce4-panel pid $PID (${#ENVS[@]} variaveis)"
+exec runuser -u "$U" -- env HOME=/home/$U GDK_BACKEND=x11 "${ENVS[@]}" /usr/local/bin/s9-panel --background

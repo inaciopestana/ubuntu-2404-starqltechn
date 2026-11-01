@@ -1,0 +1,19 @@
+[Unit]
+Description=Galaxy S9 display crash/hotplug diagnostic probe
+After=systemd-journald.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/s9-display-crash-probe
+
+# O probe deve sobreviver independentemente do LSC/MirAL.
+Restart=on-failure
+RestartSec=1
+
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,46 @@
+#!/bin/sh
+
+sleep 2
+
+CONNECTED="$(
+    xrandr --query |
+    awk '$2=="connected" {print $1}'
+)"
+
+COUNT="$(printf "%s\n" "$CONNECTED" | sed '/^$/d' | wc -l)"
+
+[ "$COUNT" -gt 1 ] || exit 0
+
+EXT="$(
+    xrandr --query |
+    awk '
+    $2=="connected" {
+        line=$0
+        if (match(line, /[0-9]+x[0-9]+\+[0-9]+\+[0-9]+/)) {
+            geom=substr(line,RSTART,RLENGTH)
+            split(geom,a,/x|\+/)
+            width=a[1]+0
+
+            if (width > best) {
+                best=width
+                out=$1
+            }
+        }
+    }
+    END {print out}
+    '
+)"
+
+[ -n "$EXT" ] || exit 0
+
+echo "External escolhido: $EXT"
+
+xrandr \
+    --output "$EXT" \
+    --primary \
+    --pos 0x0
+
+for O in $CONNECTED; do
+    [ "$O" = "$EXT" ] && continue
+    xrandr --output "$O" --off || true
+done

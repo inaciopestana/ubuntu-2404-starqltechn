@@ -1,0 +1,338 @@
+diff -ruN -x .pc -x .git -x debian -x 'obj-*' -x '*.o' -x '*.orig' -x '*.rej' -x '*.pre-*' -x '*.before-*' -x '*.backup*' -x '*.bak*' -x '*.WORKING*' -x '*.task12*' -x '*.v23-before*' -x __pycache__ -x version.h -x mir_perf_framework_setup.py -x task12p-backup -x '*.bak' pa/src/platforms/android/server/buffer.cpp pb/src/platforms/android/server/buffer.cpp
+--- a/src/platforms/android/server/buffer.cpp
++++ b/src/platforms/android/server/buffer.cpp
+@@ -32,11 +32,89 @@
+ #include <GLES2/gl2ext.h>
+ #include <boost/throw_exception.hpp>
+ #include <stdexcept>
++#include <vector>
++#include <mutex>
+ 
+ namespace mg=mir::graphics;
+ namespace mga=mir::graphics::android;
+ namespace geom=mir::geometry;
+ 
++
++// Context-aware GL texture cleanup, ported from the validated V7.
++namespace
++{
++struct PendingTextureDeletion
++{
++    EGLDisplay display;
++    EGLContext context;
++    GLuint texture;
++};
++
++std::mutex pending_texture_mutex;
++std::vector<PendingTextureDeletion> pending_textures;
++
++void delete_texture_in_current_context(GLuint texture)
++{
++    if (glIsTexture(texture) == GL_TRUE)
++        glDeleteTextures(1, &texture);
++}
++
++void flush_pending_texture_deletions()
++{
++    auto const display = eglGetCurrentDisplay();
++    auto const context = eglGetCurrentContext();
++
++    if (display == EGL_NO_DISPLAY ||
++        context == EGL_NO_CONTEXT)
++        return;
++
++    std::vector<PendingTextureDeletion> ready;
++
++    {
++        std::lock_guard<std::mutex> lock(pending_texture_mutex);
++        auto it = pending_textures.begin();
++
++        while (it != pending_textures.end())
++        {
++            if (it->display == display &&
++                it->context == context)
++            {
++                ready.push_back(*it);
++                it = pending_textures.erase(it);
++            }
++            else
++                ++it;
++        }
++    }
++
++    for (auto const& item : ready)
++        delete_texture_in_current_context(item.texture);
++}
++
++void release_owned_texture(
++    GLuint texture,
++    EGLDisplay owner_display,
++    EGLContext owner_context)
++{
++    if (texture == 0)
++        return;
++
++    if (owner_display != EGL_NO_DISPLAY &&
++        owner_context != EGL_NO_CONTEXT &&
++        eglGetCurrentDisplay() == owner_display &&
++        eglGetCurrentContext() == owner_context)
++    {
++        delete_texture_in_current_context(texture);
++        return;
++    }
++
++    std::lock_guard<std::mutex> lock(pending_texture_mutex);
++    pending_textures.push_back({
++        owner_display, owner_context, texture
++    });
++}
++}
++
+ void mga::BindResolverTex::bind()
+ {
+     tex_bind();
+@@ -63,6 +141,13 @@
+         EGLDisplay disp = it.first.first;
+         egl_extensions->eglDestroyImageKHR(disp, it.second);
+     }
++
++    release_owned_texture(
++        tex_id,
++        tex_owner_display,
++        tex_owner_context);
++
++    tex_id = 0;
+ }
+ 
+ geom::Size mga::Buffer::size() const
+@@ -104,6 +189,7 @@
+ 
+ void mga::Buffer::do_bind(std::unique_lock<std::mutex> const&)
+ {
++    flush_pending_texture_deletions();
+     native_buffer->ensure_available_for(mga::BufferAccess::read);
+ 
+     DispContextPair current
+@@ -282,10 +368,13 @@
+ 
+ void mga::Buffer::tex_bind()
+ {
++    flush_pending_texture_deletions();
+     bool const needs_initialisation = tex_id == 0;
+     if (needs_initialisation)
+     {
+         glGenTextures(1, &tex_id);
++        tex_owner_context = eglGetCurrentContext();
++        tex_owner_display = eglGetCurrentDisplay();
+     }
+     glBindTexture(GL_TEXTURE_2D, tex_id);
+     if (needs_initialisation)
+diff -ruN -x .pc -x .git -x debian -x 'obj-*' -x '*.o' -x '*.orig' -x '*.rej' -x '*.pre-*' -x '*.before-*' -x '*.backup*' -x '*.bak*' -x '*.WORKING*' -x '*.task12*' -x '*.v23-before*' -x __pycache__ -x version.h -x mir_perf_framework_setup.py -x task12p-backup -x '*.bak' pa/src/platforms/android/server/buffer.h pb/src/platforms/android/server/buffer.h
+--- a/src/platforms/android/server/buffer.h
++++ b/src/platforms/android/server/buffer.h
+@@ -131,6 +131,8 @@
+     std::shared_ptr<android::NativeBuffer> native_buffer;
+     std::shared_ptr<EGLExtensions> egl_extensions;
+     GLuint tex_id{0};
++    EGLContext tex_owner_context{EGL_NO_CONTEXT};
++    EGLDisplay tex_owner_display{EGL_NO_DISPLAY};
+ };
+ 
+ }
+diff -ruN -x .pc -x .git -x debian -x 'obj-*' -x '*.o' -x '*.orig' -x '*.rej' -x '*.pre-*' -x '*.before-*' -x '*.backup*' -x '*.bak*' -x '*.WORKING*' -x '*.task12*' -x '*.v23-before*' -x __pycache__ -x version.h -x mir_perf_framework_setup.py -x task12p-backup -x '*.bak' pa/src/platforms/android/server/display.cpp pb/src/platforms/android/server/display.cpp
+--- a/src/platforms/android/server/display.cpp
++++ b/src/platforms/android/server/display.cpp
+@@ -356,23 +356,157 @@
+     mg::DisplayConfiguration const& conf)
+ {
+     /*
+-     * We never invalidate display buffers based on the configuration to apply.
++     * TASK12P
+      *
+-     * The only way we invalidate a display buffer is if we detect that a display has
+-     * been connected or disconnected
++     * Preserve the original Android-platform behaviour during ordinary
++     * configuration changes.
+      *
+-     * Take the configuration lock to ensure consistency between our checking for external
+-     * connections and configure's checking.
++     * There is one additional case for physical external hotplug:
++     *
++     * The first buffer rebuild can happen while Mir still has the temporary
++     * host layout produced directly by HWC hotplug.  A nested compositor may
++     * immediately submit its final layout afterwards.
++     *
++     * If that final external layout differs from the temporary layout for
++     * which the buffers were just rebuilt, invalidate once more.
++     *
++     * This comparison is entirely dynamic.  There are no hardcoded
++     * resolutions, sizes, positions or monitor modes.
+      */
+     std::lock_guard<decltype(configuration_mutex)> lock{configuration_mutex};
+-    if (config.output_connections() == old_outputs) {
+-        mir::log_info("does not invalidate display buffers");
+-        configure_locked(conf, lock);
+-        return true;
++
++    auto const current_connections =
++        config.output_connections();
++
++    /*
++     * Original upstream connection-change rule.
++     */
++    if (!(current_connections == old_outputs))
++    {
++        /*
++         * Only an external transition needs the one-shot settling check.
++         *
++         * On disconnect there is no external target left to settle.
++         */
++        external_hotplug_settle_pending =
++            current_connections.external &&
++            current_connections.external != old_outputs.external;
++
++        mir::log_info(
++            "TASK12P invalidate display buffers: "
++            "connection change external=%d old_external=%d "
++            "settle_pending=%d",
++            current_connections.external,
++            old_outputs.external,
++            external_hotplug_settle_pending);
++
++        return false;
++    }
++
++
++    /*
++     * If an external display has just been connected, compare the external
++     * layout supplied now with the current host-side layout.
++     *
++     * The marker is consumed exactly once.
++     */
++    if (external_hotplug_settle_pending &&
++        config.external().connected)
++    {
++        bool found_external = false;
++        bool layout_changed = false;
++
++        auto const& current =
++            config.external();
++
++        auto const current_extents =
++            current.extents();
++
++        conf.for_each_output(
++            [&](mg::DisplayConfigurationOutput const& requested)
++            {
++                if (requested.id != current.id)
++                    return;
++
++                found_external = true;
++
++                auto const requested_extents =
++                    requested.extents();
++
++                layout_changed =
++                    requested.used != current.used ||
++                    requested.power_mode != current.power_mode ||
++                    requested.orientation != current.orientation ||
++                    requested.scale != current.scale ||
++
++                    requested.top_left.x.as_int() !=
++                        current.top_left.x.as_int() ||
++
++                    requested.top_left.y.as_int() !=
++                        current.top_left.y.as_int() ||
++
++                    requested_extents.size.width.as_int() !=
++                        current_extents.size.width.as_int() ||
++
++                    requested_extents.size.height.as_int() !=
++                        current_extents.size.height.as_int();
++
++                mir::log_info(
++                    "TASK12P external settle compare: "
++                    "found=%d changed=%d "
++                    "current=+%d+%d %dx%d "
++                    "requested=+%d+%d %dx%d "
++                    "used=%d->%d power=%d->%d "
++                    "orientation=%d->%d scale=%.6f->%.6f",
++                    found_external,
++                    layout_changed,
++
++                    current.top_left.x.as_int(),
++                    current.top_left.y.as_int(),
++                    current_extents.size.width.as_int(),
++                    current_extents.size.height.as_int(),
++
++                    requested.top_left.x.as_int(),
++                    requested.top_left.y.as_int(),
++                    requested_extents.size.width.as_int(),
++                    requested_extents.size.height.as_int(),
++
++                    current.used,
++                    requested.used,
++
++                    static_cast<int>(current.power_mode),
++                    static_cast<int>(requested.power_mode),
++
++                    static_cast<int>(current.orientation),
++                    static_cast<int>(requested.orientation),
++
++                    static_cast<double>(current.scale),
++                    static_cast<double>(requested.scale));
++            });
++
++        external_hotplug_settle_pending = false;
++
++        if (found_external && layout_changed)
++        {
++            mir::log_info(
++                "TASK12P invalidate display buffers: "
++                "post-hotplug external layout changed");
++
++            return false;
++        }
+     }
+ 
+-    mir::log_info("invalidate display buffers");
+-    return false;
++
++    /*
++     * Normal upstream path: orientation, scale, position and other ordinary
++     * changes continue to preserve the existing display buffers.
++     */
++    mir::log_info(
++        "TASK12P does not invalidate display buffers");
++
++    configure_locked(conf, lock);
++
++    return true;
+ }
+ 
+ void mga::Display::configure_locked(
+diff -ruN -x .pc -x .git -x debian -x 'obj-*' -x '*.o' -x '*.orig' -x '*.rej' -x '*.pre-*' -x '*.before-*' -x '*.backup*' -x '*.bak*' -x '*.WORKING*' -x '*.task12*' -x '*.v23-before*' -x __pycache__ -x version.h -x mir_perf_framework_setup.py -x task12p-backup -x '*.bak' pa/src/platforms/android/server/display.h pb/src/platforms/android/server/display.h
+--- a/src/platforms/android/server/display.h
++++ b/src/platforms/android/server/display.h
+@@ -107,6 +107,21 @@
+     ConfigChangeSubscription const hotplug_subscription;
+     DisplayConfiguration mutable config;
+     DisplayOutputConnections old_outputs;
++
++    /*
++     * TASK12P:
++     *
++     * A physical external hotplug may first rebuild display buffers using
++     * the host's temporary layout.  The nested compositor can then submit
++     * the final layout moments later.
++     *
++     * Keep a one-shot marker so that final post-hotplug layout can request
++     * one additional buffer rebuild when necessary.
++     *
++     * No resolution, monitor size or mode is hardcoded.
++     */
++    bool external_hotplug_settle_pending{false};
++
+     PbufferGLContext gl_context;
+     std::shared_ptr<DisplayDevice> display_device;
+     std::unique_ptr<DisplayChangePipe> display_change_pipe;

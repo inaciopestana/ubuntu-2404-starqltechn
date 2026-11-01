@@ -1,0 +1,35 @@
+#!/bin/sh
+
+USER_NAME=@S9_USER@
+RUNTIME=/run/s9-miral
+SOCKET="$RUNTIME/wayland-0"
+
+i=0
+
+while [ "$i" -lt 100 ]; do
+
+    if [ -S "$SOCKET" ]; then
+
+        setfacl \
+            -m "u:${USER_NAME}:rwx" \
+            "$RUNTIME"
+
+        setfacl \
+            -m "u:${USER_NAME}:rw" \
+            "$SOCKET"
+
+        if [ -e "$RUNTIME/wayland-0.lock" ]; then
+            setfacl \
+                -m "u:${USER_NAME}:rw" \
+                "$RUNTIME/wayland-0.lock"
+        fi
+
+        exit 0
+    fi
+
+    i=$((i + 1))
+    sleep 0.1
+done
+
+echo "s9-miral-wayland-user-access: wayland-0 nao apareceu" >&2
+exit 1

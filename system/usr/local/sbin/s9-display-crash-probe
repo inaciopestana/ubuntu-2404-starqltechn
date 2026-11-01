@@ -1,0 +1,441 @@
+#!/usr/bin/env bash
+
+set -uo pipefail
+
+BASE=/var/log/s9-display-probe
+
+mkdir -p "$BASE"
+
+RUN="$BASE/run-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$RUN"
+
+ln -sfn "$RUN" "$BASE/latest"
+
+PROBELOG="$RUN/probe.log"
+
+exec 3>>"$PROBELOG"
+
+log()
+{
+    printf '%s %s\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S.%3N')" \
+        "$*" >&3
+}
+
+children=""
+
+cleanup()
+{
+    log "PROBE_STOP"
+
+    for p in $children; do
+        kill "$p" 2>/dev/null || true
+    done
+
+    for p in $children; do
+        wait "$p" 2>/dev/null || true
+    done
+}
+
+trap cleanup EXIT INT TERM HUP
+
+
+snapshot()
+{
+    reason="$1"
+
+    stamp="$(date '+%Y%m%d-%H%M%S-%3N')"
+    f="$RUN/event-${stamp}.txt"
+
+    {
+        echo
+        echo "============================================================"
+        echo "S9 DISPLAY EVENT SNAPSHOT"
+        echo "============================================================"
+        echo "TIME=$(date --iso-8601=ns)"
+        echo "REASON=$reason"
+        echo "BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)"
+        echo "UPTIME=$(cat /proc/uptime)"
+        echo
+
+
+        echo "===== SYSTEMD SHOW ====="
+
+        for u in \
+            s9-lsc.service \
+            s9-miral-nested.service \
+            lxc-android-config.service
+        do
+            echo
+            echo "----- $u -----"
+
+            systemctl show "$u" \
+                -p ActiveState \
+                -p SubState \
+                -p Result \
+                -p MainPID \
+                -p NRestarts \
+                -p ExecMainCode \
+                -p ExecMainStatus \
+                -p ExecMainStartTimestamp \
+                -p ExecMainExitTimestamp \
+                2>&1 || true
+        done
+
+
+        echo
+        echo "===== SYSTEMD STATUS ====="
+
+        systemctl status \
+            s9-lsc.service \
+            s9-miral-nested.service \
+            --no-pager \
+            -l \
+            2>&1 || true
+
+
+        echo
+        echo "===== PROCESSOS DISPLAY ====="
+
+        ps -eo \
+            pid,ppid,user,state,lstart,etime,cmd \
+            2>&1 |
+        grep -E \
+            'PID|lomiri-system-compositor|s9-miral-shell|Xwayland|hwcomposer|surfaceflinger|lxc-start' ||
+        true
+
+
+        echo
+        echo "===== MIR SOCKETS ====="
+
+        ss -xlpn 2>&1 |
+        grep -E \
+            '/run/mir_socket|/run/s9-miral|wayland-' ||
+        true
+
+        echo
+        echo "--- /run/s9-miral ---"
+
+        ls -la \
+            /run/s9-miral \
+            2>&1 || true
+
+
+        echo
+        echo "===== DRM ====="
+
+        for d in /sys/class/drm/card*-*; do
+
+            [ -d "$d" ] || continue
+
+            echo
+            echo "--- $d ---"
+
+            for n in \
+                status \
+                enabled \
+                dpms \
+                modes
+            do
+                if [ -r "$d/$n" ]; then
+                    echo "[$n]"
+                    cat "$d/$n" 2>&1 || true
+                fi
+            done
+
+        done
+
+
+        echo
+        echo "===== SAMSUNG DP DEBUG ====="
+
+        for f in \
+            /sys/class/dp_sec/dp_error_info \
+            /sys/class/dp_sec/dex \
+            /sys/class/dp_sec/dp_hpd_state \
+            /sys/class/dp_sec/dp_sbu_sw_sel
+        do
+            if [ -r "$f" ]; then
+                echo
+                echo "--- $f ---"
+                cat "$f" 2>&1 || true
+            fi
+        done
+
+
+        echo
+        echo "===== TASK12N CONTROL ====="
+
+        if [ -e /run/s9-displayctl ]; then
+            ls -l /run/s9-displayctl
+            cat /run/s9-displayctl 2>&1 || true
+        else
+            echo "/run/s9-displayctl ausente"
+        fi
+
+
+        echo
+        echo "===== XWAYLAND / XRANDR ====="
+
+        USER_NAME=@S9_USER@
+        HOME_DIR=@S9_HOME@
+
+        XPID="$(
+            pgrep -u "$USER_NAME" -x xfsettingsd |
+            head -1
+        )"
+
+        if [ -n "${XPID:-}" ] &&
+           [ -r "/proc/$XPID/environ" ]; then
+
+            DISPLAY_REAL="$(
+                tr '\0' '\n' < "/proc/$XPID/environ" |
+                sed -n 's/^DISPLAY=//p' |
+                head -1
+            )"
+
+            XAUTH_REAL="$(
+                tr '\0' '\n' < "/proc/$XPID/environ" |
+                sed -n 's/^XAUTHORITY=//p' |
+                head -1
+            )"
+
+            [ -n "$DISPLAY_REAL" ] || DISPLAY_REAL=:0
+            [ -n "$XAUTH_REAL" ] ||
+                XAUTH_REAL="$HOME_DIR/.Xauthority"
+
+            echo "DISPLAY=$DISPLAY_REAL"
+            echo "XAUTHORITY=$XAUTH_REAL"
+
+            timeout 3 \
+                runuser -u "$USER_NAME" -- env \
+                DISPLAY="$DISPLAY_REAL" \
+                XAUTHORITY="$XAUTH_REAL" \
+                xrandr \
+                2>&1 || true
+        else
+            echo "sessao XFCE indisponivel"
+        fi
+
+
+        echo
+        echo "===== ANDROID LXC ====="
+
+        lxc-info -n android 2>&1 || true
+
+        echo
+        echo "--- Android display processes ---"
+
+        timeout 3 \
+            lxc-attach -n android -- \
+            sh -c '
+                ps -A 2>/dev/null |
+                grep -Ei "surfaceflinger|hwcomposer|composer|display" ||
+                true
+            ' \
+            2>&1 || true
+
+
+        echo
+        echo "===== SURFACEFLINGER ====="
+
+        timeout 4 \
+            lxc-attach -n android -- \
+            dumpsys SurfaceFlinger \
+            2>&1 |
+        head -400 || true
+
+
+        echo
+        echo "===== ANDROID TOMBSTONES ====="
+
+        timeout 3 \
+            lxc-attach -n android -- \
+            sh -c '
+                ls -lt /data/tombstones 2>/dev/null |
+                head -20
+            ' \
+            2>&1 || true
+
+
+        echo
+        echo "===== COREDUMPS RECENTES ====="
+
+        if command -v coredumpctl >/dev/null 2>&1; then
+
+            coredumpctl \
+                --no-pager \
+                --since '-2 min' \
+                list \
+                2>&1 || true
+        else
+            echo "coredumpctl indisponivel"
+        fi
+
+
+        echo
+        echo "===== JOURNAL DISPLAY - ULTIMOS 30s ====="
+
+        journalctl \
+            -b \
+            --since '-30 sec' \
+            -o short-precise \
+            -u s9-lsc.service \
+            -u s9-miral-nested.service \
+            -u lxc-android-config.service \
+            --no-pager \
+            2>&1 || true
+
+
+        echo
+        echo "===== KERNEL - TAIL ====="
+
+        dmesg -T 2>&1 |
+        tail -300
+
+
+        echo
+        echo "============================================================"
+        echo "END SNAPSHOT"
+        echo "============================================================"
+
+    } > "$f" 2>&1
+
+    log "SNAPSHOT=$f REASON=$reason"
+}
+
+
+log "PROBE_START RUN=$RUN"
+log "BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)"
+
+
+#
+# 1. JOURNAL DOS COMPOSITORES
+#
+
+journalctl \
+    -f \
+    -n 0 \
+    -o short-precise \
+    -u s9-lsc.service \
+    -u s9-miral-nested.service \
+    -u lxc-android-config.service \
+    >>"$RUN/systemd-follow.log" 2>&1 &
+
+children="$children $!"
+
+
+#
+# 2. KERNEL AO VIVO
+#
+
+journalctl \
+    -k \
+    -f \
+    -n 0 \
+    -o short-precise \
+    >>"$RUN/kernel-follow.log" 2>&1 &
+
+children="$children $!"
+
+
+#
+# 3. UDEV / DRM HOTPLUG
+#
+
+if command -v udevadm >/dev/null 2>&1; then
+
+    udevadm monitor \
+        --kernel \
+        --property \
+        --subsystem-match=drm \
+        >>"$RUN/drm-udev.log" 2>&1 &
+
+    children="$children $!"
+fi
+
+
+#
+# 4. ANDROID LOGCAT
+#
+
+if command -v lxc-attach >/dev/null 2>&1; then
+
+    lxc-attach -n android -- \
+        logcat \
+        -b all \
+        -v threadtime \
+        >>"$RUN/android-logcat.log" 2>&1 &
+
+    children="$children $!"
+fi
+
+
+#
+# Baseline inicial
+#
+
+snapshot "BASELINE"
+
+
+previous=""
+heartbeat=0
+
+while :; do
+
+    LSC="$(
+        systemctl show s9-lsc.service \
+            -p MainPID \
+            -p NRestarts \
+            -p ActiveState \
+            -p SubState \
+            -p Result \
+            --no-pager 2>/dev/null |
+        tr '\n' ';'
+    )"
+
+    MIRAL="$(
+        systemctl show s9-miral-nested.service \
+            -p MainPID \
+            -p NRestarts \
+            -p ActiveState \
+            -p SubState \
+            -p Result \
+            --no-pager 2>/dev/null |
+        tr '\n' ';'
+    )"
+
+    DP="$(
+        cat /sys/class/drm/card0-DP-1/status \
+            2>/dev/null ||
+        echo missing
+    )"
+
+    DSI="$(
+        cat /sys/class/drm/card0-DSI-1/status \
+            2>/dev/null ||
+        echo missing
+    )"
+
+    state="LSC={$LSC} MIRAL={$MIRAL} DP=$DP DSI=$DSI"
+
+    if [ "$state" != "$previous" ]; then
+
+        log "STATE_CHANGE $state"
+
+        if [ -n "$previous" ]; then
+            snapshot "STATE_CHANGE"
+        fi
+
+        previous="$state"
+    fi
+
+    heartbeat=$((heartbeat + 1))
+
+    if [ "$heartbeat" -ge 20 ]; then
+        log "HEARTBEAT $state"
+        heartbeat=0
+    fi
+
+    sleep 0.25
+done

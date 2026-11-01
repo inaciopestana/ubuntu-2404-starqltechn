@@ -1,0 +1,4 @@
+# origem	destino	classe
+Samsung Galaxy S9+	Samsung Galaxy S9	device-name
+samsung-star2qltechn	samsung-starqltechn	device-codename
+star2qlte_chn_halium_defconfig	starqlte_chn_halium_defconfig	kernel-defconfig
