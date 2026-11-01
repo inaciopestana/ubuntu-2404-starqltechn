@@ -1,0 +1,137 @@
+#!/bin/sh
+# S9 initramfs /init - mounts the Ubuntu root and hands over to it.
+#
+# DRAFT: generalized from the author's working script, which used a fixed length
+# (0 111619768 linear /dev/sda29 2048). The computed length below (partition size from sysfs
+# minus 2048 sectors at each end) is expected to give the same value but has NOT been verified
+# on a phone yet. Do not flash an image containing this file before checking it.
+#
+# The Ubuntu root file system is an ext4 image stored INSIDE the phone's `userdata`
+# partition (/dev/sda29), starting 1 MiB from its beginning. This script exposes that area
+# as /dev/mapper/s9root with a device-mapper "linear" target, mounts it, moves the vendor and
+# firmware partitions into it and runs switch_root to /usr/local/sbin/s9-init-wrapper.
+#
+# Needs in the initramfs: sh, mount, mknod, sleep, grep, cat, mkdir, switch_root and dmsetup
+# (see kernel/ramdisk/README.md). Everything prints to the kernel console.
+
+export PATH=/bin:/sbin
+export LD_LIBRARY_PATH=/lib/aarch64-linux-gnu:/lib
+
+DATA=/dev/sda29          # userdata
+VENDOR=/dev/sda23        # Android vendor (ext4)
+MODEM=/dev/sda17         # modem firmware (vfat)
+START=2048               # 1 MiB, in 512-byte sectors
+GUARD=2048               # 1 MiB left unused at the end of the partition
+
+echo "S9 initramfs: starting (device-mapper linear root)"
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+
+mkdir -p /run
+mount -t tmpfs tmpfs /run
+mkdir -p /run/lock /dev/mapper /vendor/firmware_mnt /newroot
+
+# Device-mapper control node (there is no udev here)
+if [ ! -c /dev/mapper/control ]; then
+    mknod /dev/mapper/control c 10 236
+    chmod 600 /dev/mapper/control
+fi
+
+echo "S9 initramfs: waiting for the UFS storage"
+N=0
+while [ ! -b "$DATA" ]; do
+    N=$((N + 1))
+    if [ "$N" -ge 60 ]; then
+        echo "ERROR: $DATA did not appear"
+        exec sh
+    fi
+    sleep 1
+done
+echo "S9 initramfs: userdata found"
+
+# Samsung partitions that the Android container and the firmware loader need
+N=0
+while [ ! -b "$VENDOR" ] || [ ! -b "$MODEM" ]; do
+    N=$((N + 1))
+    if [ "$N" -ge 60 ]; then
+        echo "WARNING: vendor/modem partitions did not appear"
+        break
+    fi
+    sleep 1
+done
+
+if [ -b "$VENDOR" ]; then
+    mount -t ext4 -o ro "$VENDOR" /vendor || echo "WARNING: could not mount vendor"
+fi
+if [ -b "$MODEM" ]; then
+    mkdir -p /vendor/firmware_mnt
+    mount -t vfat -o ro "$MODEM" /vendor/firmware_mnt || echo "WARNING: could not mount firmware_mnt"
+fi
+
+# Size of the mapped area = partition size (512-byte sectors, from sysfs) minus both guards
+PART=${DATA#/dev/}
+TOTAL=$(cat "/sys/class/block/$PART/size")
+LEN=$((TOTAL - START - GUARD))
+
+/sbin/dmsetup remove s9root 2>/dev/null || true
+echo "S9 initramfs: creating dm-linear: 0 $LEN linear $DATA $START"
+/sbin/dmsetup create s9root --table "0 $LEN linear $DATA $START"
+RC=$?
+if [ "$RC" -ne 0 ]; then
+    echo "ERROR: dmsetup create returned $RC"
+    /sbin/dmsetup ls 2>&1
+    exec sh
+fi
+
+/sbin/dmsetup mknodes s9root 2>&1 || true
+N=0
+while [ ! -b /dev/mapper/s9root ]; do
+    N=$((N + 1))
+    if [ "$N" -ge 10 ]; then
+        echo "ERROR: /dev/mapper/s9root did not appear"
+        /sbin/dmsetup info s9root 2>&1
+        ls -la /dev/mapper
+        exec sh
+    fi
+    sleep 1
+done
+/sbin/dmsetup table s9root
+
+echo "S9 initramfs: mounting root"
+/bin/mount -t ext4 -o rw,noatime /dev/mapper/s9root /newroot
+RC=$?
+if [ "$RC" -ne 0 ]; then
+    echo "ERROR: mounting root returned $RC"
+    exec sh
+fi
+
+# Persistent boot log for diagnosis
+{
+    echo
+    echo "===== S9 INITRAMFS DM-LINEAR ROOT ====="
+    date
+    uname -a
+    echo "root=/dev/mapper/s9root offset=$((START * 512)) sectors=$LEN"
+    echo "DM TABLE:"
+    /sbin/dmsetup table s9root
+    echo "MOUNTS:"
+    mount
+} >> /newroot/boot-stage.log 2>&1
+sync
+
+mkdir -p /newroot/dev /newroot/proc /newroot/sys /newroot/run /newroot/vendor
+
+# Keep vendor (and the firmware mount below it) available after the switch
+if grep -q ' /vendor ' /proc/mounts; then
+    mount -o move /vendor /newroot/vendor
+fi
+mount -o move /dev  /newroot/dev
+mount -o move /proc /newroot/proc
+mount -o move /sys  /newroot/sys
+mount -o move /run  /newroot/run
+
+echo "INITRAMFS: calling switch_root" >> /newroot/boot-stage.log
+sync
+exec switch_root /newroot /usr/local/sbin/s9-init-wrapper
