@@ -169,7 +169,7 @@ Then, inside the arm64 root (chroot with `qemu-aarch64-static`):
    adb exec-in 'dd of=/dev/block/platform/soc/1d84000.ufshc/by-name/userdata bs=1M seek=1' < rootfs.img
    adb exec-out 'dd if=/dev/block/platform/soc/1d84000.ufshc/by-name/userdata bs=1M skip=1 count=6144' | sha256sum
    ```
-   The two hashes must be equal. After the first boot, grow the file system to the whole
+   The two hashes must be equal. (For a finished ZIP, [`tools/image/flash-from-pc.sh`](../tools/image/flash-from-pc.sh) does exactly this over `adb`, with the checks, and also writes `boot`.) After the first boot, grow the file system to the whole
    mapping: `sudo resize2fs /dev/mapper/s9root`.
 
 ## 6. First boot

@@ -31,3 +31,25 @@ sudo tools/image/build-image.sh --backup ~/s9-backups/<backup> --boot <boot-clea
 
 Copy the ZIP to a **microSD card or USB-OTG drive** (the installer refuses to run from the internal storage, which it
 overwrites) and install it from TWRP. See the front page of the repository for the full sequence.
+
+### Without a microSD card: USB cable and `adb`
+
+Boot TWRP and connect the phone to the PC (`adb devices` must say `recovery`). Two ways:
+
+1. **`adb sideload`.** In TWRP, Advanced > ADB Sideload, then `adb sideload s9-....zip` on the PC. The installer is the same
+   one as above; it accepts this because the sideloaded copy is not on `userdata`. **Not tested:** TWRP keeps a sideloaded
+   package in RAM, and this ZIP is about 1 GB, so it may not fit.
+2. **`flash-from-pc.sh`.** It reads the sizes and SHA-256 values from the installer script inside the ZIP, then does what the
+   installer does, but from the PC (nothing is copied to the phone except the 64 MiB boot image):
+
+   ```
+   tools/image/flash-from-pc.sh s9-....zip            # optional: --serial SERIAL, --method exec-in|nc, --port N
+   ```
+
+   It checks the device (`starqltechn`, boot = `sda20`, userdata = `sda29`), unmounts `userdata`, asks you to type `FLASH`,
+   streams the root image into `userdata` (1 MiB offset), reads it back and compares the SHA-256, and only then writes `boot`
+   and verifies it. If anything differs it stops before touching `boot`, and tells you not to reboot into Ubuntu.
+   The stream goes through `adb exec-in` when your `adb` has it, otherwise through `adb forward` plus `nc -l` in TWRP.
+   Tested here only against a stand-in `adb` on a PC (small files, both methods), **not on a real phone**.
+
+Either way the ZIP is verified before anything is written, and `system`, `vendor`, modem and `efs` are never touched.

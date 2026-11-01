@@ -29,6 +29,10 @@ Five steps, in this order. Details, risks and the way back are in [`docs/install
    container is inside the root image), and it writes them with read-back checks. Keep the ZIP on a **microSD card or
    USB-OTG drive, never on the internal storage**: the ZIP overwrites `userdata`, and the installer refuses to run from it.
    Build the ZIP yourself with [`tools/image/build-image.sh`](tools/image/build-image.sh); a ready-made release is not published yet.
+   No microSD card or USB-OTG drive? Two alternatives over a USB cable to the PC, both in TWRP: `adb sideload` of the ZIP
+   (TWRP > Advanced > ADB Sideload; untested, and the ZIP of about 1 GB must fit in the recovery's RAM-backed sideload area),
+   or [`tools/image/flash-from-pc.sh`](tools/image/flash-from-pc.sh), which streams the root image into `userdata` and the boot image into
+   `boot` with `adb` and checks both by SHA-256 read-back (details in [`tools/image/README.md`](tools/image/README.md)).
 
 > **Kernel.** The boot image is built from FakeShell's [`android_kernel_samsung_sdm845`](https://github.com/FakeShell/android_kernel_samsung_sdm845)
 > (branch `ubports`, Linux 4.9.186, base commit `a22a0b358140`) plus the patches in [`kernel/patches/`](kernel/patches/README.md).
@@ -51,7 +55,7 @@ Five steps, in this order. Details, risks and the way back are in [`docs/install
 | `shell/` | the custom MirAL shell (window manager) |
 | `system/`, `userland/` | systemd units, udev/sudoers rules, helper scripts and apps |
 | `installer/` | overlay installer and first-boot setup (tested on a scratch directory only) |
-| `tools/image/` | builds the flashable TWRP ZIP (boot + Ubuntu root image) from a backup of the phone, with a privacy audit |
+| `tools/image/` | builds the flashable TWRP ZIP (boot + Ubuntu root image) from a backup of the phone, with a privacy audit; `flash-from-pc.sh` installs it over USB/adb |
 | `tools/twrp/` | patch and flash the TWRP that keeps its settings in `/cache` |
 | `tools/` | other maintainer tools: privacy scan, export scripts |
 
