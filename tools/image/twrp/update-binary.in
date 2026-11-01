@@ -77,6 +77,21 @@ ui_print "boot: $BOOT_BLOCK   userdata: $DATA_BLOCK"
 set_progress 0.02
 
 if [ "${S9_TEST:-}" != 1 ]; then
+  # The package overwrites userdata, so it must not be read from the internal storage.
+  ZREAL="$(readlink -f "$ZIPFILE" 2>/dev/null)"; [ -n "$ZREAL" ] || ZREAL="$ZIPFILE"
+  case "$ZREAL" in
+    /data/*|/sdcard/*|/storage/emulated/*|/data/media/*|/sdcard) NOTSD=1;;
+    *) NOTSD=0;;
+  esac
+  BEST=""; BESTDEV=""
+  while read -r DEV MP REST; do
+    case "$ZREAL" in "$MP"|"$MP"/*) if [ "${#MP}" -gt "${#BEST}" ]; then BEST="$MP"; BESTDEV="$DEV"; fi;; esac
+  done < /proc/mounts
+  ZDEV="$(readlink -f "$BESTDEV" 2>/dev/null)"; [ -n "$ZDEV" ] || ZDEV="$BESTDEV"
+  if [ "$NOTSD" = 1 ] || [ "$ZDEV" = "$DATA_BLOCK" ]; then
+    abort_install "the ZIP is on the internal storage (userdata), which this package overwrites. Copy it to the SD card or a USB drive and flash it from there."
+  fi
+  ui_print "ZIP location: $ZREAL (device $ZDEV)"
   # Unmount everything TWRP mounted from userdata (/data, /sdcard, ...).
   N=0
   while [ "$N" -lt 6 ]; do

@@ -56,7 +56,7 @@ SMALL_DIR_BASES = ['.config', '.local/share']
 SMALL_DIR_DENY = ['*keyring*', 'pulse', 'vlc', 'dconf', 'goa-*', 'gcr', 'seahorse', 'evolution', 'chromium*', 'google-chrome*',
                   'claude*', 'bravesoftware', 'mozilla', 'libreoffice', 'trash', 'gvfs*', '*metadata*', 'recently-used*',
                   'user-dirs.*', 'session*', '*cache*', 'ibus', 'fcitx*', 'nautilus', 'tracker*', 'xfce4-notifyd', 'wine*',
-                  'box64', 'procps', 'enchant', 'sni-qt', 'xdg-desktop-portal', 'Code', 'code*', 'pip', 'yarn', 'npm*', 'ssh', 'gnupg*']
+                  'box64', 'procps', 'pki', 'remmina*', 'debauchee', 'barrier*', 'flatpak', 's9-telefone', 'cpak', 'kio', 'kservices5', 'enchant', 'sni-qt', 'xdg-desktop-portal', 'Code', 'code*', 'pip', 'yarn', 'npm*', 'ssh', 'gnupg*']
 OPT_KEEP = ('s9-', 'mesa-turnip-kgsl', 'mesa-kgsl-peekaboo', 'halium-overlay')
 KEEP_HOME = ['.config/xfce4', '.config/menus', '.config/autostart', '.config/Thunar', '.config/gtk-3.0', '.config/gtk-2.0',
              '.config/mimeapps.list', '.config/fontconfig', '.config/systemd/user', '.local/share/applications',
@@ -86,7 +86,7 @@ SECRET_BLOCK = {
 }
 SECRET_REVIEW = {
     'password-like assignment': re.compile(r'(?i)\b(?:psk|password|passwd|passphrase|apikey|api_key|token)\b\s*[=:]\s*["\']?[A-Za-z0-9/+_.\-]{6,}'),
-    'e-mail address': re.compile(r'\b[A-Za-z0-9._%+-]+@(?!example\.|localhost|users\.noreply)[A-Za-z0-9-]+\.[A-Za-z]{2,}\b'),
+    'e-mail address': re.compile(r'\b[A-Za-z0-9._%+-]+@(?!example\.|localhost|users\.noreply|\d+\.service)[A-Za-z0-9-]+\.[A-Za-z]{2,}\b'),
     'MAC address': re.compile(r'\b(?!00:00:00:00:00:00|ff:ff:ff:ff:ff:ff)(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b'),
     '15-digit number (IMEI?)': re.compile(r'(?<![0-9.])\d{15}(?![0-9.])'),
 }
