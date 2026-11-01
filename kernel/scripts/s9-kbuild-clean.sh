@@ -8,11 +8,13 @@
 # chroot, so no personal path ends up in a boot image you want to publish.
 #
 # Run (needs root for systemd-nspawn):
-#   sudo S9_WORK=$HOME/s9-ubuntu2404-kernel bash s9-kbuild-clean.sh <base-boot.img> <sha256-of-base-boot.img>
+#   sudo S9_WORK=$HOME/s9-ubuntu2404-kernel bash s9-kbuild-clean.sh <base-boot.img> <sha256-of-base-boot.img> [prebuilt-Image.gz-dtb]
+# With the third argument the build is skipped and that kernel (from an earlier run) is used.
 # It writes nothing to the phone. Output: $S9_WORK/out/clean-<timestamp>/boot-clean.img
 set -euo pipefail
 BASE=${1:?usage: sudo bash s9-kbuild-clean.sh <base-boot.img> <sha256>}
 BASE_SHA=${2:?usage: sudo bash s9-kbuild-clean.sh <base-boot.img> <sha256>}
+PREBUILT=${3:-}
 U=${SUDO_USER:?run with sudo}
 R=${S9_WORK:-/home/$U/s9-ubuntu2404-kernel}
 D=$R/workdir/downloads
@@ -29,15 +31,18 @@ mkdir -p "$NEWOBJ"
 
 echo "== checks"
 echo "$BASE_SHA  $BASE" | sha256sum -c - || { echo "ERROR: base boot image hash mismatch"; exit 1; }
-for p in "$KS" "$OLDOBJ/.config" "$TC/bin" "$C" "$UB" "$MK"; do [ -e "$p" ] || { echo "ERROR: missing $p"; exit 1; }; done
+for p in "$UB" "$MK"; do [ -e "$p" ] || { echo "ERROR: missing $p"; exit 1; }; done
 [ -d "$TC32" ] || TC32=""
 grep -qE '^#define SECDP_HDCP_DISABLE' "$KS/drivers/gpu/drm/msm/dp/secdp.h" || echo "WARNING: SECDP_HDCP_DISABLE is not active in this tree"
-cp "$OLDOBJ/.config" "$NEWOBJ/.config"
 
 BINDS=(--bind="$KS":/build/kernel-source --bind="$NEWOBJ":/build/kernel-obj --bind-ro="$TC":/build/tc64)
 [ -n "$TC32" ] && BINDS+=(--bind-ro="$TC32":/build/tc32)
 NS=(systemd-nspawn -q --register=no "${BINDS[@]}" -D "$C")
 
+if [ -z "$PREBUILT" ]; then
+for p in "$KS" "$OLDOBJ/.config" "$TC/bin" "$C"; do [ -e "$p" ] || { echo "ERROR: missing $p"; exit 1; }; done
+[ -d "$TC32" ] || TC32=""
+cp "$OLDOBJ/.config" "$NEWOBJ/.config"
 echo "== full build in the chroot (this takes a while; log: $OUTD/build.log)"
 "${NS[@]}" /bin/bash -c "
 set -e
@@ -48,7 +53,8 @@ cd /build/kernel-source
 make O=/build/kernel-obj olddefconfig </dev/null
 make O=/build/kernel-obj -j$(nproc) </dev/null
 " 2>&1 | tee "$OUTD/build.log" || { echo "BUILD FAILED, see $OUTD/build.log"; exit 1; }
-NEWK=$NEWOBJ/arch/arm64/boot/Image.gz-dtb
+fi
+NEWK=${PREBUILT:-$NEWOBJ/arch/arm64/boot/Image.gz-dtb}
 [ -s "$NEWK" ] || { echo "ERROR: no Image.gz-dtb produced"; exit 1; }
 ls -l "$NEWK"
 
@@ -60,7 +66,7 @@ outd = pathlib.Path(sys.argv[1]); newk = pathlib.Path(sys.argv[2]); mk = sys.arg
 args = shlex.split((outd/'mkbootimg-args.txt').read_text())
 i = args.index('--kernel'); args[i + 1] = str(newk)
 raw = outd/'boot-raw.img'
-subprocess.run(['python3', '-I', mk] + args + ['-o', str(raw)], check=True)
+subprocess.run(['python3', mk] + args + ['-o', str(raw)], check=True)
 PAGE = 4096
 al = lambda n: (n + PAGE - 1) // PAGE * PAGE
 oldk = outd/'base-unpack'/'kernel'
