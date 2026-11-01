@@ -36,10 +36,6 @@ Five steps, in this order. Details, risks and the way back are in [`docs/install
 
 > **Kernel.** The boot image is built from FakeShell's [`android_kernel_samsung_sdm845`](https://github.com/FakeShell/android_kernel_samsung_sdm845)
 > (branch `ubports`, Linux 4.9.186, base commit `a22a0b358140`) plus the patches in [`kernel/patches/`](kernel/patches/README.md).
-> Andrey0800770's [`samsung_sdm845-kernel` releases](https://github.com/Andrey0800770/samsung_sdm845-kernel/releases) (Linux 4.9.337 with KernelSU/SUSFS, file
-> [`starqltechn-v4.9.337-Rel11.zip`](https://github.com/Andrey0800770/samsung_sdm845-kernel/releases/download/V4.9.337-011-susfs4ksu/starqltechn-v4.9.337-Rel11.zip)) are credited here as the S9 kernel base the author points to;
-> the kernel that this repository's patches were made on and that the boot image is compiled from is the FakeShell one.
->
 > The five steps describe the author's setup on one phone. The patched TWRP and the two ZIPs of step 4 are the
 > author's choice; the Ubuntu ZIP of step 5 has been built and checked on a PC but **not yet flashed on a phone**, and
 > nobody else has repeated any step.
