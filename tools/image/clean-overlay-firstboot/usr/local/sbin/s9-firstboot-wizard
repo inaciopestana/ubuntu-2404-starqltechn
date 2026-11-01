@@ -1,0 +1,143 @@
+#!/usr/bin/python3
+"""s9-firstboot-wizard - asks for the user name, the password and the host name on the first boot.
+
+Runs as the placeholder account inside the desktop session. It only collects the answers; the root helper
+s9-firstboot-request (through sudo) checks them again and s9-firstboot-apply creates the account and reboots.
+"""
+import json
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, os.environ.get('S9_FIRSTBOOT_LIB', '/usr/local/lib/s9-firstboot'))
+import s9fb  # noqa: E402
+
+REQUEST_CMD = ['sudo', '-n', '/usr/local/sbin/s9-firstboot-request']
+
+
+def build(Gtk, GLib, on_submit):
+    """Create the window. on_submit(user, password, host) -> error text or None."""
+    win = Gtk.Window(title='Set up your Galaxy S9')
+    win.set_default_size(560, -1)
+    win.set_position(Gtk.WindowPosition.CENTER)
+    win.set_deletable(False)
+    win.set_keep_above(True)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+    for side in ('top', 'bottom', 'start', 'end'):
+        getattr(box, 'set_margin_' + side)(24)
+    win.add(box)
+
+    title = Gtk.Label()
+    title.set_markup('<span size="x-large" weight="bold">Welcome</span>')
+    title.set_xalign(0)
+    box.pack_start(title, False, False, 0)
+    intro = Gtk.Label(label='Choose how you will sign in and how this phone is named on the network.')
+    intro.set_xalign(0)
+    intro.set_line_wrap(True)
+    box.pack_start(intro, False, False, 0)
+
+    grid = Gtk.Grid(column_spacing=12, row_spacing=10)
+    box.pack_start(grid, False, False, 6)
+
+    def row(n, label, entry, hint=None):
+        lab = Gtk.Label(label=label)
+        lab.set_xalign(0)
+        grid.attach(lab, 0, n, 1, 1)
+        entry.set_hexpand(True)
+        entry.set_width_chars(28)
+        grid.attach(entry, 1, n, 1, 1)
+        if hint:
+            h = Gtk.Label()
+            h.set_markup('<small>%s</small>' % GLib.markup_escape_text(hint))
+            h.set_xalign(0)
+            grid.attach(h, 1, n + 1, 1, 1)
+    e_user, e_p1, e_p2, e_host = Gtk.Entry(), Gtk.Entry(), Gtk.Entry(), Gtk.Entry()
+    for e in (e_p1, e_p2):
+        e.set_visibility(False)
+        e.set_input_purpose(Gtk.InputPurpose.PASSWORD)
+    e_host.set_text('s9')
+    row(0, 'User name', e_user, 'Lower-case letters, digits, "-" and "_"')
+    row(2, 'Password', e_p1, 'At least %d characters' % s9fb.MIN_PASSWORD)
+    row(4, 'Repeat password', e_p2)
+    row(5, 'Host name', e_host, 'How the phone appears on your network (letters, digits, "-")')
+    show = Gtk.CheckButton(label='Show the password')
+    show.connect('toggled', lambda b: [e.set_visibility(b.get_active()) for e in (e_p1, e_p2)])
+    box.pack_start(show, False, False, 0)
+
+    status = Gtk.Label()
+    status.set_xalign(0)
+    status.set_line_wrap(True)
+    box.pack_start(status, False, False, 0)
+    button = Gtk.Button(label='Create account and restart')
+    button.get_style_context().add_class('suggested-action')
+    box.pack_start(button, False, False, 6)
+
+    def message(text, bad=True):
+        status.set_markup('<span foreground="%s">%s</span>' % ('#c01c28' if bad else '#26a269', GLib.markup_escape_text(text)))
+
+    def submit(*_):
+        user, host = e_user.get_text().strip(), e_host.get_text().strip().lower()
+        p1, p2 = e_p1.get_text(), e_p2.get_text()
+        err = s9fb.check_user(user) or s9fb.check_password(p1, p2) or s9fb.check_host(host)
+        if err:
+            message(err)
+            return
+        button.set_sensitive(False)
+        for e in (e_user, e_p1, e_p2, e_host):
+            e.set_sensitive(False)
+        message('Creating your account... the phone restarts by itself in about a minute.', bad=False)
+        while Gtk.events_pending():
+            Gtk.main_iteration()
+        err = on_submit(user, p1, host)
+        if err:
+            message(err)
+            button.set_sensitive(True)
+            for e in (e_user, e_p1, e_p2, e_host):
+                e.set_sensitive(True)
+    button.connect('clicked', submit)
+    for e in (e_user, e_p1, e_p2, e_host):
+        e.connect('activate', submit)
+    try:
+        previous = open(s9fb.path(s9fb.ERROR_FILE)).read().strip()
+        if previous:
+            message(previous)
+    except OSError:
+        pass
+    win.show_all()
+    e_user.grab_focus()
+    return win
+
+
+def send_request(user, password, host):
+    payload = json.dumps({'user': user, 'password': password, 'hostname': host})
+    try:
+        r = subprocess.run(REQUEST_CMD, input=payload.encode(), capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        return 'Could not run the setup helper: %s' % e
+    if r.returncode != 0:
+        return (r.stderr.decode(errors='replace').strip() or 'The setup helper failed.')[:300]
+    return None
+
+
+def main():
+    if os.path.exists(s9fb.path(s9fb.MARKER)) or os.path.exists(s9fb.path(s9fb.REQUEST)):
+        return 0
+    import gi
+    gi.require_version('Gtk', '3.0')
+    from gi.repository import GLib, Gtk
+    ok = Gtk.init_check()
+    if not (ok[0] if isinstance(ok, tuple) else ok):
+        print('no display yet', file=sys.stderr)
+        return 1                     # systemd starts us again in a few seconds
+    if os.environ.get('S9_FIRSTBOOT_DRYRUN') == '1':
+        send = lambda u, p, h: print('DRYRUN request:', u, h) or None   # noqa: E731
+    else:
+        send = send_request
+    win = build(Gtk, GLib, send)
+    win.connect('destroy', Gtk.main_quit)
+    Gtk.main()
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

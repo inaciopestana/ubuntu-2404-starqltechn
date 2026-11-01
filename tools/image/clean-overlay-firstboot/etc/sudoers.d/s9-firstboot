@@ -1,0 +1,3 @@
+# First boot only: lets the wizard (running as the placeholder account) hand the answers to the root helper.
+# s9-firstboot-apply deletes this file when the setup is done.
+s9user ALL=(root) NOPASSWD: /usr/local/sbin/s9-firstboot-request

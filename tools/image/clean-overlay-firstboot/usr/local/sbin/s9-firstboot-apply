@@ -1,0 +1,214 @@
+#!/usr/bin/python3
+"""s9-firstboot-apply - turns the placeholder account into the user's account (root, started by the request helper).
+
+Order: stop the desktop, back up the account files, rewrite passwd/shadow/group/gshadow/subuid/subgid, rewrite the
+text files and symlinks recorded at build time (rename.json), rename paths that carry the placeholder, set the host name,
+remove the wizard, reboot. On any error everything is put back and the wizard is started again with the reason.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.environ.get('S9_FIRSTBOOT_LIB', '/usr/local/lib/s9-firstboot'))
+import s9fb  # noqa: E402
+
+P = s9fb.PLACEHOLDER
+SYSTEMD = os.environ.get('S9_FIRSTBOOT_NO_SYSTEMD') != '1'
+RX = re.compile(r'(?<![A-Za-z0-9])%s(?![A-Za-z0-9])' % re.escape(P))
+ACCOUNT_FILES = ['etc/passwd', 'etc/shadow', 'etc/group', 'etc/gshadow', 'etc/subuid', 'etc/subgid']
+
+
+def log(msg):
+    line = '%s %s' % (time.strftime('%F %T'), msg)
+    print(line, flush=True)
+    try:
+        with open(s9fb.path(s9fb.LOG), 'a') as f:
+            f.write(line + '\n')
+    except OSError:
+        pass
+
+
+def ctl(*args):
+    if SYSTEMD:
+        subprocess.run(['systemctl'] + list(args), check=False)
+
+
+def read(rel):
+    with open(s9fb.path(rel), errors='surrogateescape') as f:
+        return f.read()
+
+
+def write(rel, text):
+    with open(s9fb.path(rel), 'w', errors='surrogateescape') as f:   # in place: keeps owner and mode
+        f.write(text)
+
+
+def rewrite_fields(rel, fn):
+    if not os.path.exists(s9fb.path(rel)):
+        return
+    out = []
+    for line in read(rel).split('\n'):
+        if not line or line.startswith('#'):
+            out.append(line)
+            continue
+        f = fn(line.split(':'))
+        if f is not None:
+            out.append(':'.join(f))
+    write(rel, '\n'.join(out))
+
+
+def members(field, new):
+    return ','.join(new if m == P else m for m in field.split(',') if m)
+
+
+def apply(req, undo):
+    user, hashed, host = req['user'], req['hash'], req['hostname']
+    sub = lambda text: RX.sub(lambda m: user, text)   # noqa: E731
+    today = str(int(time.time() // 86400))
+
+    log('backing up the account files')
+    for rel in ACCOUNT_FILES:
+        if os.path.exists(s9fb.path(rel)):
+            old = read(rel)
+            undo.append(lambda rel=rel, old=old: write(rel, old))
+
+    log('accounts: %s -> %s' % (P, user))
+
+    def fix_passwd(f):
+        if f[0] == P:
+            f[0], f[4], f[5] = user, user, '/home/' + user
+        return f
+
+    def fix_shadow(f):
+        if f[0] == P:
+            f[0], f[1], f[2] = user, hashed, today
+        return f
+
+    def fix_group(f):
+        if f[0] == P:
+            f[0] = user
+        if len(f) >= 4:
+            f[3] = members(f[3], user)
+        return f
+
+    def fix_gshadow(f):
+        if f[0] == P:
+            f[0] = user
+        if len(f) >= 4:
+            f[2], f[3] = members(f[2], user), members(f[3], user)
+        return f
+    rewrite_fields('etc/passwd', fix_passwd)
+    rewrite_fields('etc/shadow', fix_shadow)
+    rewrite_fields('etc/group', fix_group)
+    rewrite_fields('etc/gshadow', fix_gshadow)
+    for rel in ('etc/subuid', 'etc/subgid'):
+        rewrite_fields(rel, lambda f: ([user] + f[1:]) if f[0] == P else f)
+
+    if user != P:
+        man = json.load(open(s9fb.path(s9fb.MANIFEST)))
+        n = 0
+        for rel in man.get('text_files', []):
+            p = s9fb.path(rel)
+            if not os.path.isfile(p) or os.path.islink(p):
+                continue
+            old = read(rel)
+            new = sub(old)
+            if new != old:
+                write(rel, new)
+                undo.append(lambda rel=rel, old=old: write(rel, old))
+                n += 1
+        log('text files rewritten: %d' % n)
+        n = 0
+        for rel in man.get('symlinks', []):
+            p = s9fb.path(rel)
+            if os.path.islink(p):
+                tg = os.readlink(p)
+                nt = sub(tg)
+                if nt != tg:
+                    os.unlink(p)
+                    os.symlink(nt, p)
+                    undo.append(lambda p=p, tg=tg: (os.unlink(p), os.symlink(tg, p)))
+                    n += 1
+        log('symlinks retargeted: %d' % n)
+        n = 0
+        for top in man.get('rename_dirs', []):
+            base = s9fb.path(top)
+            for dirpath, dirs, files in os.walk(base, topdown=False):
+                for nme in files + dirs:
+                    if nme != P and not RX.search(nme):
+                        continue
+                    src = os.path.join(dirpath, nme)
+                    dst = os.path.join(dirpath, user if nme == P else sub(nme))
+                    if src != dst and not os.path.lexists(dst):
+                        os.rename(src, dst)
+                        undo.append(lambda src=src, dst=dst: os.rename(dst, src))
+                        n += 1
+        log('paths renamed: %d' % n)
+
+    log('host name: ' + host)
+    for rel in ('etc/hostname', 'etc/hosts'):
+        if os.path.exists(s9fb.path(rel)):
+            o = read(rel)
+            undo.append(lambda rel=rel, o=o: write(rel, o))
+    write('etc/hostname', host + '\n')
+    write('etc/hosts', '127.0.0.1 localhost\n127.0.1.1 %s\n\n::1 ip6-localhost ip6-loopback\nfe00::0 ip6-localnet\n'
+                       'ff00::0 ip6-mcastprefix\nff02::1 ip6-allnodes\nff02::2 ip6-allrouters\n' % host)
+
+
+def main():
+    if os.geteuid() != 0 and os.environ.get('S9_FIRSTBOOT_TEST') != '1':
+        sys.exit('must run as root')
+    if not os.path.exists(s9fb.path(s9fb.REQUEST)):
+        sys.exit('no request')
+    req = json.load(open(s9fb.path(s9fb.REQUEST)))
+    err = s9fb.check_user(req.get('user')) or s9fb.check_host(req.get('hostname'))
+    if err or not str(req.get('hash', '')).startswith('$6$'):
+        log('bad request: %s' % (err or 'hash'))
+        os.unlink(s9fb.path(s9fb.REQUEST))
+        sys.exit(1)
+    log('first-boot setup starts (user %s, host %s)' % (req['user'], req['hostname']))
+    ctl('stop', 's9-firstboot-wizard.service')
+    ctl('stop', 's9-miral-nested.service')
+    if SYSTEMD:
+        for _ in range(20):
+            if subprocess.run(['pkill', '-KILL', '-u', P], check=False).returncode != 0:
+                break
+            time.sleep(0.5)
+    undo = []
+    try:
+        apply(req, undo)
+    except Exception as e:   # noqa: BLE001 - anything: put everything back
+        log('FAILED: %r; undoing' % (e,))
+        for fn in reversed(undo):
+            try:
+                fn()
+            except Exception as e2:   # noqa: BLE001
+                log('undo step failed: %r' % (e2,))
+        with open(s9fb.path(s9fb.ERROR_FILE), 'w') as f:
+            f.write('Setup failed (%s). Nothing was changed; try again. Details: /var/log/s9-firstboot.log\n' % type(e).__name__)
+        os.unlink(s9fb.path(s9fb.REQUEST))
+        ctl('start', 's9-miral-nested.service')
+        ctl('start', 's9-firstboot-wizard.service')
+        sys.exit(1)
+    # success: leave no secret and no wizard behind
+    for rel in (s9fb.REQUEST, 'etc/sudoers.d/s9-firstboot', 'etc/systemd/system/s9-firstboot-wizard.service',
+                'etc/systemd/system/multi-user.target.wants/s9-firstboot-wizard.service'):
+        try:
+            os.unlink(s9fb.path(rel))
+        except OSError:
+            pass
+    with open(s9fb.path(s9fb.MARKER), 'w') as f:
+        f.write('done %s\n' % time.strftime('%F %T'))
+    ctl('daemon-reload')
+    os.sync()
+    log('done; rebooting')
+    if SYSTEMD:
+        subprocess.run(['systemctl', 'reboot', '--no-block'], check=False)
+
+
+if __name__ == '__main__':
+    main()

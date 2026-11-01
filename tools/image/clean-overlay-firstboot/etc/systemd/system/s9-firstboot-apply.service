@@ -1,0 +1,8 @@
+[Unit]
+Description=Galaxy S9 first boot: create the user's account, set the host name, restart
+ConditionPathExists=/var/lib/s9-ubports/firstboot.request
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/s9-firstboot-apply
+TimeoutStartSec=300

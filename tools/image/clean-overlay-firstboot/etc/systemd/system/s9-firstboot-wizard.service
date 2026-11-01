@@ -1,0 +1,22 @@
+[Unit]
+Description=Galaxy S9 first boot: choose user name, password and host name
+ConditionPathExists=!/var/lib/s9-ubports/firstboot.done
+ConditionPathExists=!/var/lib/s9-ubports/firstboot.request
+After=s9-miral-nested.service s9-firstrun.service
+Wants=s9-miral-nested.service
+
+[Service]
+Type=simple
+User=s9user
+Environment=HOME=/home/s9user
+Environment=DISPLAY=:0
+Environment=GDK_BACKEND=x11
+Environment=NO_AT_BRIDGE=1
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStart=/usr/local/sbin/s9-firstboot-wizard
+Restart=on-failure
+RestartSec=3
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

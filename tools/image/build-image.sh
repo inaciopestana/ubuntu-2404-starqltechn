@@ -8,11 +8,15 @@
 # Output: <out>/s9-<mode>-<stamp>.zip  (+ .sha256), flashed from TWRP with the normal "Install" button.
 #
 # mode restore : the root exactly as it was in the backup (personal data included: keep it private).
-# mode clean   : scrubbed root for distribution. Needs --user NAME (the account created in the image;
-#                the password is asked for, or give --password-hash-file). tools/image/audit-tree.py
-#                removes personal data, renames the desktop account, installs the first-boot overlay
-#                (clean-overlay/) and then audits the result; a blocking finding stops the build.
-#                --stop-after-audit stops there (no image), to iterate on the findings.
+# mode clean   : scrubbed root for distribution. tools/image/audit-tree.py removes personal data,
+#                renames the desktop account, installs the first-boot overlay and then audits the
+#                result; a blocking finding stops the build. Two ways to get the account:
+#                  --first-boot-account   (releases) the image carries a locked placeholder account and a
+#                                         wizard asks for user name, password and host name on the first boot
+#                                         (clean-overlay/ + clean-overlay-firstboot/)
+#                  --user NAME            (private tests) the account is created now; the password is asked
+#                                         for, or give --password-hash-file
+#                --stop-after-audit stops after the audit (no image), to iterate on the findings.
 #
 # The root file system is rebuilt with EXACTLY the ext4 features of the phone's file system
 # (read from meta/ext4-root.txt) because the 4.9 kernel cannot mount newer features
@@ -21,7 +25,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 DECOMP=${S9_DECOMPRESS:-zstd -dc}
 MODE=restore BACKUP= BOOT= OUT= LABEL= WORK= KEEP=0 EXTRA_MIB=1024 SKIP_VERIFY=0
-NEWUSER= HOSTNAME_NEW=s9 PWFILE= STOP_AUDIT=0 KEEP_HOME=() DROP=() ALLOW_BLOB=() PRUNE=() PRIVATE=0
+NEWUSER= FIRSTBOOT=0 HOSTNAME_NEW=s9 PWFILE= STOP_AUDIT=0 KEEP_HOME=() DROP=() ALLOW_BLOB=() PRUNE=() PRIVATE=0
 HALIUM_SHA=527c53fd8e27957fe4046cd8588d689dec338e8abb6531af4602c2f235ca0944
 while [ $# -gt 0 ]; do
   case $1 in
@@ -35,6 +39,7 @@ while [ $# -gt 0 ]; do
     --keep-work) KEEP=1; shift;;
     --skip-backup-check) SKIP_VERIFY=1; shift;;
     --user) NEWUSER=$2; shift 2;;
+    --first-boot-account) FIRSTBOOT=1; NEWUSER=s9user; shift;;
     --hostname) HOSTNAME_NEW=$2; shift 2;;
     --password-hash-file) PWFILE=$2; shift 2;;
     --stop-after-audit) STOP_AUDIT=1; shift;;
@@ -57,9 +62,10 @@ say "preflight"
 [ -n "$BACKUP" ] && [ -n "$BOOT" ] && [ -n "$OUT" ] || die "need --backup DIR --boot FILE --out DIR"
 case $MODE in
   restore) ;;
-  clean) [ -n "$NEWUSER" ] || die "mode clean needs --user NAME"
+  clean) [ -n "$NEWUSER" ] || die "mode clean needs --first-boot-account or --user NAME"
          [[ $NEWUSER =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] && [ "$NEWUSER" != root ] || die "--user must be a lower-case account name (not root)"
          [ -f "$HERE/audit-tree.py" ] && [ -d "$HERE/clean-overlay" ] || die "audit-tree.py or clean-overlay/ missing next to this script"
+         [ "$FIRSTBOOT" = 0 ] || [ -d "$HERE/clean-overlay-firstboot" ] || die "clean-overlay-firstboot/ missing next to this script"
          command -v openssl >/dev/null || die "missing tool: openssl";;
   *) die "unknown mode $MODE";;
 esac
@@ -117,27 +123,34 @@ if [ "$MODE" = clean ]; then
   python3 -I "$HERE/audit-tree.py" inventory "$TREE" | tee "$WORK/inventory.txt" | head -n 330
   OLDUSER=$(awk -F: '$3==1000{print $1; exit}' "$TREE/etc/passwd")
   [ -n "$OLDUSER" ] || die "no account with uid 1000 in the tree"
-  say "1c/5 account and password for the new image"
-  if [ -n "$PWFILE" ]; then
-    S9_PASSWORD_HASH=$(head -n1 "$PWFILE")
+  OVERLAYS=(--overlay "$HERE/clean-overlay") FB_SCRUB=() FB_AUDIT=()
+  if [ "$FIRSTBOOT" = 1 ]; then
+    say "1c/5 account: a locked placeholder; the user's name, password and host name are asked on the first boot"
+    OVERLAYS+=(--overlay "$HERE/clean-overlay-firstboot"); FB_SCRUB=(--defer-account); FB_AUDIT=(--first-boot-account)
+    S9_PASSWORD_HASH=
   else
-    [ -r /dev/tty ] || die "no terminal for the password prompt: use --password-hash-file"
-    while :; do
-      read -rsp "   Password for '$NEWUSER': " P1 </dev/tty >/dev/tty; echo >/dev/tty
-      read -rsp "   Repeat: " P2 </dev/tty >/dev/tty; echo >/dev/tty
-      [ -n "$P1" ] && [ "$P1" = "$P2" ] && break
-      echo "   empty or different, again" >/dev/tty
-    done
-    S9_PASSWORD_HASH=$(printf '%s' "$P1" | openssl passwd -6 -stdin); unset P1 P2
+    say "1c/5 account and password for the new image"
+    if [ -n "$PWFILE" ]; then
+      S9_PASSWORD_HASH=$(head -n1 "$PWFILE")
+    else
+      [ -r /dev/tty ] || die "no terminal for the password prompt: use --password-hash-file"
+      while :; do
+        read -rsp "   Password for '$NEWUSER': " P1 </dev/tty >/dev/tty; echo >/dev/tty
+        read -rsp "   Repeat: " P2 </dev/tty >/dev/tty; echo >/dev/tty
+        [ -n "$P1" ] && [ "$P1" = "$P2" ] && break
+        echo "   empty or different, again" >/dev/tty
+      done
+      S9_PASSWORD_HASH=$(printf '%s' "$P1" | openssl passwd -6 -stdin); unset P1 P2
+    fi
   fi
   export S9_PASSWORD_HASH
   say "1d/5 scrubbing personal data and renaming the account"
   python3 -I "$HERE/audit-tree.py" scrub "$TREE" --user "$NEWUSER" --hostname "$HOSTNAME_NEW" \
-      --overlay "$HERE/clean-overlay" "${KEEP_HOME[@]}" "${DROP[@]}" "${PRUNE[@]}"
+      "${OVERLAYS[@]}" "${FB_SCRUB[@]}" "${KEEP_HOME[@]}" "${DROP[@]}" "${PRUNE[@]}"
   unset S9_PASSWORD_HASH
   say "1e/5 audit (blocking findings stop the build)"
   REPORT=$OUT/clean-report-$STAMP.txt
-  python3 -I "$HERE/audit-tree.py" audit "$TREE" --old-user "$OLDUSER" --expect-user "$NEWUSER" \
+  python3 -I "$HERE/audit-tree.py" audit "$TREE" --old-user "$OLDUSER" --expect-user "$NEWUSER" "${FB_AUDIT[@]}" \
       --halium-sha256 "$HALIUM_SHA" --report "$REPORT" "${ALLOW_BLOB[@]}" || {
     info "the tree is kept in $TREE for inspection (delete it afterwards)"
     die "the audit found blocking problems; nothing was built"; }

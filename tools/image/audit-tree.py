@@ -12,7 +12,7 @@ backup). Nothing here follows a symlink out of the tree and nothing is sent anyw
 The password is read from the environment variable S9_PASSWORD_HASH (a crypt(3) hash), never
 from the command line. The old user name is never printed: reports show <OLD>.
 """
-import argparse, fnmatch, hashlib, os, re, shutil, stat, sys, time
+import argparse, fnmatch, hashlib, json, os, re, shutil, stat, sys, time
 
 SKIP_TOP = {'proc', 'sys', 'dev', 'run', 'mnt', 'media'}
 MIB = 1 << 20
@@ -282,6 +282,9 @@ class Tree:
         return cands[0]
 
 
+DEFER_USER = 's9user'     # placeholder account of an image whose real account is chosen at the first boot
+
+
 def user_regex(old):
     risky = len(old) < 4 or old in {'user', 'ubuntu', 'admin', 'phablet', 'root', 'test', 'pi', 'android', 'default'}
     if risky:
@@ -470,12 +473,15 @@ def copy_filtered(src, dst, relname, stats):
 def cmd_scrub(a):
     t = Tree(a.tree)
     old = t.old_user(a.old_user)
-    new = a.user
-    if not re.match(r'^[a-z_][a-z0-9_-]{0,31}$', new) or new == 'root':
-        sys.exit('ERROR: --user must be a lower-case account name other than root')
-    pwhash = os.environ.get('S9_PASSWORD_HASH', '')
-    if not re.match(r'^\$(?:5|6|y)\$', pwhash):
-        sys.exit('ERROR: set S9_PASSWORD_HASH to a crypt(3) hash ($6$..., $y$... or $5$...)')
+    if a.defer_account:
+        new, pwhash = DEFER_USER, '!'      # locked placeholder; the first-boot wizard creates the real account
+    else:
+        new = a.user or ''
+        if not re.match(r'^[a-z_][a-z0-9_-]{0,31}$', new) or new == 'root':
+            sys.exit('ERROR: --user must be a lower-case account name other than root')
+        pwhash = os.environ.get('S9_PASSWORD_HASH', '')
+        if not re.match(r'^\$(?:5|6|y)\$', pwhash):
+            sys.exit('ERROR: set S9_PASSWORD_HASH to a crypt(3) hash ($6$..., $y$... or $5$...)')
     hostname = a.hostname
     today = int(time.time() // 86400)
     ids = [p for p in t.accounts() if p[0] == old][0]
@@ -745,6 +751,7 @@ def cmd_scrub(a):
     changed = 0
     renamed = 0
     links = 0
+    changed_rels, link_rels = [], []
     for top in ('etc', 'usr', 'opt', 'var', 'home', 'root', 'srv'):
         if not os.path.isdir(t.h(top)):
             continue
@@ -759,6 +766,7 @@ def cmd_scrub(a):
                     os.unlink(p)
                     os.symlink(nt, p)
                     links += 1
+                    link_rels.append(rel)
                 continue
             if not stat.S_ISREG(st.st_mode) or not t.interesting(rel):
                 continue
@@ -770,6 +778,7 @@ def cmd_scrub(a):
                 with open(p, 'w', errors='surrogateescape') as f:
                     f.write(nt)
                 changed += 1
+                changed_rels.append(rel)
     for top in ('etc', 'usr/local', 'opt', 'var/lib', 'home'):
         base = t.h(top)
         for dirpath, dirs, files in os.walk(base, topdown=False):
@@ -782,6 +791,33 @@ def cmd_scrub(a):
                     os.rename(src, dst)
                     renamed += 1
     log('text files rewritten: %d, symlinks retargeted: %d, paths renamed: %d' % (changed, links, renamed))
+    if a.defer_account:
+        def final_rel(rel):
+            parts = []
+            for c in rel.split('/'):
+                if c == old or (not risky and rx.search(c)):
+                    c = new if c == old else rx.sub(new, c)
+                parts.append(c)
+            return '/'.join(parts)
+
+        def located(rels):
+            out = []
+            for r in rels:
+                for cand in (final_rel(r), r):
+                    if os.path.lexists(t.h(cand)):
+                        out.append(cand)
+                        break
+                else:
+                    log('manifest: %s vanished, skipped' % r)
+            return sorted(set(out))
+        manifest = {'placeholder': new, 'text_files': located(changed_rels), 'symlinks': located(link_rels),
+                    'rename_dirs': ['etc', 'usr/local', 'opt', 'var/lib', 'home']}
+        mdir = t.h('usr/local/share/s9-firstboot')
+        os.makedirs(mdir, exist_ok=True)
+        with open(os.path.join(mdir, 'rename.json'), 'w') as f:
+            json.dump(manifest, f, indent=1)
+        log('first-boot account: placeholder "%s", %d text files and %d symlinks recorded in rename.json'
+            % (new, len(manifest['text_files']), len(manifest['symlinks'])))
 
     print('== scrub: host name and first-boot overlay')
     open(t.h('etc/hostname'), 'w').write(hostname + '\n')
@@ -792,24 +828,32 @@ def cmd_scrub(a):
     if a.overlay:
         wants = t.h('etc/systemd/system/multi-user.target.wants')
         os.makedirs(wants, exist_ok=True)
-        for dirpath, dirs, files in os.walk(a.overlay):
-            for fn in files:
-                src = os.path.join(dirpath, fn)
-                rel = os.path.relpath(src, a.overlay)
-                dst = t.h(rel)
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                if os.path.lexists(dst):
-                    os.unlink(dst)
-                shutil.copy2(src, dst)
-                os.chown(dst, 0, 0)
-                if rel.startswith('etc/systemd/system/') and rel.endswith('.service') and 'WantedBy=multi-user.target' in open(src).read():
-                    link = os.path.join(wants, fn)
-                    if os.path.lexists(link):
-                        os.unlink(link)
-                    os.symlink('/etc/systemd/system/' + fn, link)
-                    log('installed and enabled ' + rel)
-                else:
-                    log('installed ' + rel)
+        for odir in a.overlay:
+            for dirpath, dirs, files in os.walk(odir):
+                for fn in files:
+                    src = os.path.join(dirpath, fn)
+                    rel = os.path.relpath(src, odir)
+                    dst = t.h(rel)
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    if os.path.lexists(dst):
+                        os.unlink(dst)
+                    shutil.copyfile(src, dst)
+                    os.chown(dst, 0, 0)
+                    # modes are set here, not taken from the source: a copy may have lost the executable bit
+                    if rel.startswith(('usr/local/sbin/', 'usr/local/bin/', 'usr/local/libexec/')):
+                        os.chmod(dst, 0o755)
+                    elif rel.startswith('etc/sudoers.d/'):
+                        os.chmod(dst, 0o440)
+                    else:
+                        os.chmod(dst, 0o644)
+                    if rel.startswith('etc/systemd/system/') and rel.endswith('.service') and 'WantedBy=multi-user.target' in open(src).read():
+                        link = os.path.join(wants, fn)
+                        if os.path.lexists(link):
+                            os.unlink(link)
+                        os.symlink('/etc/systemd/system/' + fn, link)
+                        log('installed and enabled ' + rel)
+                    else:
+                        log('installed ' + rel)
         os.makedirs(t.h('var/lib/s9-ubports'), exist_ok=True)
         done = t.h('var/lib/s9-ubports/firstrun.done')
         if os.path.exists(done):
@@ -830,6 +874,40 @@ def cmd_audit(a):
     rx = None
     if old and old != new:
         rx, _ = user_regex(old)
+    if a.first_boot_account:
+        # the real account is created by the wizard: check that everything the wizard needs is in the tree
+        if new != DEFER_USER:
+            add(block, 'first-boot account', '--expect-user must be "%s"' % DEFER_USER)
+        need = ['usr/local/sbin/s9-firstboot-wizard', 'usr/local/sbin/s9-firstboot-request', 'usr/local/sbin/s9-firstboot-apply',
+                'etc/systemd/system/s9-firstboot-wizard.service', 'etc/systemd/system/s9-firstboot-apply.service',
+                'etc/sudoers.d/s9-firstboot', 'usr/local/share/s9-firstboot/rename.json', 'home/' + DEFER_USER]
+        for rel in need:
+            if not os.path.lexists(t.h(rel)):
+                add(block, 'first-boot wizard file missing', rel)
+        for rel in need[:3]:
+            if os.path.isfile(t.h(rel)) and not os.stat(t.h(rel)).st_mode & 0o100:
+                add(block, 'first-boot wizard script is not executable', rel)
+        if os.path.isfile(t.h('etc/sudoers.d/s9-firstboot')):
+            if (os.stat(t.h('etc/sudoers.d/s9-firstboot')).st_mode & 0o777) != 0o440:
+                add(block, 'sudoers file has the wrong mode (must be 0440)', 'etc/sudoers.d/s9-firstboot')
+        mf = t.h('usr/local/share/s9-firstboot/rename.json')
+        if os.path.isfile(mf):
+            try:
+                man = json.load(open(mf))
+                prx = re.compile(r'(?<![A-Za-z0-9])%s(?![A-Za-z0-9])' % re.escape(DEFER_USER))
+                for rel in man.get('text_files', []):
+                    txt = read_text_file(t.h(rel)) if os.path.isfile(t.h(rel)) else None
+                    if txt is None or not prx.search(txt):
+                        add(review, 'rename.json lists a file without the placeholder', rel)
+                for rel in man.get('symlinks', []):
+                    if not os.path.islink(t.h(rel)):
+                        add(review, 'rename.json lists a missing symlink', rel)
+            except (ValueError, OSError) as e:
+                add(block, 'rename.json is unreadable', str(e))
+        for l in open(t.h('etc/shadow'), errors='surrogateescape'):
+            f = l.rstrip('\n').split(':')
+            if f and f[0] == DEFER_USER and f[1] not in ('!', '*', '!!'):
+                add(block, 'the placeholder account has a usable password', DEFER_USER)
     # accounts
     for p in t.accounts():
         if p[2].isdigit() and int(p[2]) >= 1000 and p[0] not in ('nobody', new):
@@ -968,12 +1046,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
     p = sub.add_parser('inventory'); p.add_argument('tree'); p.add_argument('--old-user'); p.set_defaults(fn=cmd_inventory)
-    p = sub.add_parser('scrub'); p.add_argument('tree'); p.add_argument('--user', required=True)
-    p.add_argument('--old-user'); p.add_argument('--hostname', default='s9'); p.add_argument('--overlay')
+    p = sub.add_parser('scrub'); p.add_argument('tree'); p.add_argument('--user')
+    p.add_argument('--defer-account', action='store_true', help='leave a locked placeholder account; a wizard creates the real one at the first boot')
+    p.add_argument('--old-user'); p.add_argument('--hostname', default='s9'); p.add_argument('--overlay', action='append')
     p.add_argument('--keep-home', action='append'); p.add_argument('--drop', action='append')
     p.add_argument('--prune-opt-unreferenced', action='store_true'); p.set_defaults(fn=cmd_scrub)
     p = sub.add_parser('audit'); p.add_argument('tree'); p.add_argument('--old-user')
-    p.add_argument('--expect-user', required=True); p.add_argument('--halium-sha256'); p.add_argument('--report')
+    p.add_argument('--expect-user', required=True); p.add_argument('--first-boot-account', action='store_true'); p.add_argument('--halium-sha256'); p.add_argument('--report')
     p.add_argument('--limit', type=int, default=12); p.add_argument('--allow-blob', action='append'); p.set_defaults(fn=cmd_audit)
     a = ap.parse_args()
     a.fn(a)
