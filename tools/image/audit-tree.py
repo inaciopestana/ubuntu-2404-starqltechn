@@ -48,7 +48,9 @@ NONFREE_PACKAGES = ['google-chrome-stable', 'google-chrome-beta', 'google-chrome
 DEFAULT_DROP = ['usr/local/bin/wine*', 'usr/local/bin/regedit', 'usr/bin/qemu-*-static', 'usr/local/sbin/*wine*',
                 'etc/ssh/sshd_config.d/*debug-root*',
                 # Adreno 630 firmware: Samsung/Qualcomm files, restored at first boot from the phone's own vendor partition
-                'usr/lib/firmware/a630_sqe.fw', 'usr/lib/firmware/a630_gmu.bin']
+                'usr/lib/firmware/a630_sqe.fw', 'usr/lib/firmware/a630_gmu.bin',
+                # optional keyboard/mouse sharing tool of the author (docs/kmshare.md): `kmshare.py setup` recreates these
+                'etc/modules-load.d/kmshare.conf', 'etc/udev/rules.d/70-kmshare.rules']
 SECRET_FILES = ['etc/ppp/chap-secrets', 'etc/ppp/pap-secrets']       # keep only the comment lines
 BACKUP_RE = re.compile(r'\.(before|pre|bak|backup|orig|old|rollback|disabled|superseded|save|dpkg-old|dpkg-new|'
                        r'dpkg-dist|dpkg-bak|ucf-old|ucf-new|ucf-dist)([-._~].*)?$|~$')
@@ -63,7 +65,8 @@ OPT_KEEP = ('s9-', 'mesa-turnip-kgsl', 'mesa-kgsl-peekaboo', 'halium-overlay')
 KEEP_HOME = ['.config/xfce4', '.config/menus', '.config/autostart', '.config/Thunar', '.config/gtk-3.0', '.config/gtk-2.0',
              '.config/mimeapps.list', '.config/fontconfig', '.config/systemd/user', '.local/share/applications',
              'Desktop', '.xprofile', '.profile', '.bashrc', '.bash_logout', '.Xresources', '.gtkrc-2.0']
-DENY_IN_KEPT = ['*recent*', '*history*', '*.log', '*.sqlite*', '*cookie*', '*bookmark*', '*token*', '*secret*',
+DENY_IN_KEPT = ['icons.screen*.rc',   # xfdesktop: positions of the author's desktop icons (names of files and launchers)
+                '*recent*', '*history*', '*.log', '*.sqlite*', '*cookie*', '*bookmark*', '*token*', '*secret*',
                 '*password*', '*.key', '*.pem', '*.xbel', '*.lock', '*.core', 'sessions', 'xfce4-session-*']
 LAUNCHER_DENY = re.compile(r'wine|office|soda|\.exe|bottles', re.I)   # launchers of removed apps
 MAX_KEPT_FILE = 5 * MIB
