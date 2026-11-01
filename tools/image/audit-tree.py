@@ -23,6 +23,11 @@ CLEAR_DIRS = [  # everything inside is removed (names can be identifiers, e.g. B
     'var/lib/bluetooth', 'var/lib/ofono', 'var/lib/dhcp', 'var/lib/upower', 'var/mail', 'var/spool/mail',
     'etc/apt/auth.conf.d', 'var/cache/man', 'var/cache/fontconfig', 'var/cache/cups', 'var/cache/lightdm',
     'var/cache/PackageKit', 'var/cache/apt/archives/partial',
+    # the author's phone: call/SMS log, cast password/token, kernel logs, memory dumps, Android /data, caches
+    'var/lib/android-data', 'var/lib/flatpak', 'var/lib/ubuntu-advantage', 'var/lib/s9-phone', 'var/lib/s9-cast',
+    'var/lib/s9-lastkmsg', 'var/lib/s9-segv-cores', 'var/lib/dhcpcd', 'var/lib/udisks2', 'var/lib/blueman',
+    'var/backups', 'var/lib/systemd/pstore', 'var/lib/s9-chrome-x11', 'var/lib/s9-docklike-fix', 'var/lib/s9-interna',
+    'var/lib/colord',
 ]
 CLEAR_FILES_ONLY = [  # files are removed, the directory skeleton stays
     'var/lib/AccountsService', 'var/lib/lightdm', 'var/lib/systemd/coredump', 'var/lib/systemd/linger',
@@ -33,12 +38,27 @@ REMOVE_GLOBS = [
     'var/lib/systemd/random-seed', 'etc/passwd-', 'etc/shadow-', 'etc/group-', 'etc/gshadow-',
     'etc/subuid-', 'etc/subgid-', 'etc/.pwd.lock', 'etc/udev/rules.d/70-persistent-net.rules',
     'var/lib/logrotate/status', 'etc/wpa_supplicant/*.conf', 'etc/apt/auth.conf',
+    'etc/netplan/90-NM-*.yaml', 'etc/security/opasswd', 'etc/apt/sources.list.d/claude-desktop.list',
+    'usr/share/keyrings/claude-desktop-archive-keyring.asc', 'var/lib/s9-*.log', 'var/lib/s9-clock/events.log',
     'swapfile', 'var/cache/apt/archives/*.deb', 'var/cache/apt/*.bin', 'etc/cups/subscriptions.conf*', 'var/lib/dpkg/*-old', 'etc/NetworkManager/*.state',
 ]
-NONFREE_PACKAGES = ['google-chrome-stable', 'google-chrome-beta', 'google-chrome-unstable',
-                    'microsoft-edge-stable']
+NONFREE_PACKAGES = ['google-chrome-stable', 'google-chrome-beta', 'google-chrome-unstable',   # third-party packages:
+                    'microsoft-edge-stable', 'claude-desktop',                                   # not part of the image
+                    'hangover-wine', 'hangover-libarm64ecfex', 'hangover-libwow64fex', 'hangover-wowbox64']
+DEFAULT_DROP = ['usr/local/bin/wine*', 'usr/local/bin/regedit', 'usr/bin/qemu-*-static', 'usr/local/sbin/*wine*',
+                'etc/ssh/sshd_config.d/*debug-root*']
+SECRET_FILES = ['etc/ppp/chap-secrets', 'etc/ppp/pap-secrets']       # keep only the comment lines
+BACKUP_RE = re.compile(r'\.(before|pre|bak|backup|orig|old|rollback|disabled|superseded|save|dpkg-old|dpkg-new|'
+                       r'dpkg-dist|dpkg-bak|ucf-old|ucf-new|ucf-dist)([-._~].*)?$|~$')
+BACKUP_SCOPE = ('etc/', 'usr/local/', 'usr/bin/', 'usr/sbin/', 'usr/lib/', 'usr/libexec/', 'usr/share/pixmaps/', 'var/lib/')
+SMALL_DIR_MAX = 1 * MIB
+SMALL_DIR_BASES = ['.config', '.local/share']
+SMALL_DIR_DENY = ['*keyring*', 'pulse', 'vlc', 'dconf', 'goa-*', 'gcr', 'seahorse', 'evolution', 'chromium*', 'google-chrome*',
+                  'claude*', 'bravesoftware', 'mozilla', 'libreoffice', 'trash', 'gvfs*', '*metadata*', 'recently-used*',
+                  'user-dirs.*', 'session*', '*cache*', 'ibus', 'fcitx*', 'nautilus', 'tracker*', 'xfce4-notifyd', 'wine*',
+                  'box64', 'procps', 'enchant', 'sni-qt', 'xdg-desktop-portal', 'Code', 'code*', 'pip', 'yarn', 'npm*', 'ssh', 'gnupg*']
 OPT_KEEP = ('s9-', 'mesa-turnip-kgsl', 'mesa-kgsl-peekaboo', 'halium-overlay')
-KEEP_HOME = ['.config/xfce4', '.config/autostart', '.config/Thunar', '.config/gtk-3.0', '.config/gtk-2.0',
+KEEP_HOME = ['.config/xfce4', '.config/menus', '.config/autostart', '.config/Thunar', '.config/gtk-3.0', '.config/gtk-2.0',
              '.config/mimeapps.list', '.config/fontconfig', '.config/systemd/user', '.local/share/applications',
              'Desktop', '.xprofile', '.profile', '.bashrc', '.bash_logout', '.Xresources', '.gtkrc-2.0']
 DENY_IN_KEPT = ['*recent*', '*history*', '*.log', '*.sqlite*', '*cookie*', '*bookmark*', '*token*', '*secret*',
@@ -47,7 +67,8 @@ LAUNCHER_DENY = re.compile(r'wine|office|soda|\.exe|bottles', re.I)   # launcher
 MAX_KEPT_FILE = 5 * MIB
 
 # ---- what the audit accepts --------------------------------------------------------------------
-ALLOW_UNOWNED = ('usr/local/', 'opt/s9-', 'opt/mesa-turnip-kgsl', 'opt/mesa-kgsl-peekaboo', 'opt/halium-overlay',
+ALLOW_UNOWNED = ('usr/local/', 'usr/bin/miral-', 'usr/bin/Xwayland', 'usr/lib/aarch64-linux-gnu/mir1/', 'var/lib/s9-',
+                 'var/lib/lxc-android-config/', 'var/lib/colord/', 'opt/s9-', 'opt/mesa-turnip-kgsl', 'opt/mesa-kgsl-peekaboo', 'opt/halium-overlay',
                  'var/lib/lxc/android/', 'usr/lib/modules/', 'var/lib/dpkg/', 'var/lib/apt/', 'var/cache/',
                  'var/log/', 'var/lib/systemd/', 'var/lib/dbus/', 'var/lib/ucf/', 'var/lib/polkit-1/',
                  'var/lib/AccountsService/', 'var/lib/logrotate/', 'var/lib/pam/', 'var/lib/misc/',
@@ -55,7 +76,7 @@ ALLOW_UNOWNED = ('usr/local/', 'opt/s9-', 'opt/mesa-turnip-kgsl', 'opt/mesa-kgsl
 GENERATED = [re.compile(p) for p in (
     r'__pycache__/', r'\.py[co]$', r'^usr/lib/locale/locale-archive', r'icon-theme\.cache$', r'^usr/share/mime/',
     r'mimeinfo\.cache$', r'gschemas\.compiled$', r'giomodule\.cache$', r'loaders\.cache$', r'immodules\.cache$',
-    r'/fonts\.(dir|scale|cache-\d)$', r'^usr/share/info/dir', r'^usr/lib/modules/.*/modules\.', r'^usr/share/glib-2\.0/',
+    r'/fonts\.(dir|scale|cache-\d)$', r'/hwdb\.bin$', r'/plugins\.dat$', r'^usr/share/info/dir', r'^usr/lib/modules/.*/modules\.', r'^usr/share/glib-2\.0/',
     r'^usr/lib/python3/dist-packages/.*\.egg-info', r'^usr/share/applications/.*\.desktop$', r'^usr/share/icons/.*/\.icon-theme\.cache')]
 BLOB_EXT = ('.so', '.ko', '.bin', '.img', '.mbn', '.elf', '.apk', '.jar', '.exe', '.dll', '.msi', '.deb', '.fw', '.mdt')
 FORBIDDEN_PATHS = ['opt/google', 'opt/wine*', 'opt/llvm-mingw*', 'root/.ssh', 'etc/ssh/ssh_host_*', 'swapfile']
@@ -234,7 +255,9 @@ class Tree:
         if rel.startswith(('usr/local/', 'opt/', 'home/', 'root/')):
             return True
         if rel.startswith(('var/lib/dpkg', 'var/lib/apt', 'var/cache', 'var/log', 'usr/share/doc', 'usr/share/man',
-                           'usr/share/locale', 'usr/lib/python3', 'usr/share/zoneinfo')):
+                           'usr/share/locale', 'usr/lib/python3', 'usr/share/zoneinfo', 'etc/alternatives/', 'etc/ssl/certs/',
+                           'etc/rc0.d/', 'etc/rc1.d/', 'etc/rc2.d/', 'etc/rc3.d/', 'etc/rc4.d/', 'etc/rc5.d/', 'etc/rc6.d/',
+                           'etc/rcS.d/')) or rel == 'etc/ld.so.cache':
             return False
         n = norm(rel)
         return n not in self.owned or n in self.modified_conffiles
@@ -278,6 +301,51 @@ def du(path):
     return total
 
 
+def opt_references(t):
+    """{/opt/<name>: number of files that mention it}. Roots outside /opt, then transitively inside the
+    referenced /opt directories. A directory with 0 is not used by anything that is kept."""
+    ob = t.h('opt')
+    names = sorted(os.listdir(ob)) if os.path.isdir(ob) else []
+    pat = re.compile(r'/opt/([A-Za-z0-9._+-]+)')
+    counts = {n: 0 for n in names}
+
+    def scan(rel):
+        txt = read_text_file(t.h(rel), 2 * MIB)
+        if not txt:
+            return set()
+        hit = set()
+        for m in pat.finditer(txt):
+            tok = m.group(1)
+            if tok in counts:
+                hit.add(tok)
+            elif len(tok) >= 6:  # a name built at run time, e.g. /opt/s9-mir-lib-v${N}: every directory with that prefix
+                hit.update(n for n in names if n.startswith(tok))
+        return hit
+    for top in ('etc', 'usr/local', 'usr/lib/systemd', 'usr/libexec', 'usr/share/applications', 'usr/share/dbus-1', 'home', 'var/lib'):
+        if not os.path.isdir(t.h(top)):
+            continue
+        for rel, st in walk(t.root, top):
+            if rel.startswith(('var/lib/dpkg', 'var/lib/apt', 'var/lib/android-data', 'var/lib/lxc')) or not stat.S_ISREG(st.st_mode):
+                continue
+            if st.st_size > 2 * MIB:
+                continue
+            for n in scan(rel):
+                counts[n] += 1
+    todo = [n for n in names if counts[n]]
+    seen = set(todo)
+    while todo:
+        n = todo.pop()
+        for rel, st in walk(t.root, 'opt/' + n):
+            if stat.S_ISREG(st.st_mode) and st.st_size <= 2 * MIB:
+                for m in scan(rel):
+                    if m != n:
+                        counts[m] += 1
+                        if m not in seen:
+                            seen.add(m)
+                            todo.append(m)
+    return counts
+
+
 # ---- inventory -------------------------------------------------------------------------------
 def cmd_inventory(a):
     t = Tree(a.tree)
@@ -305,12 +373,17 @@ def cmd_inventory(a):
                 q = os.path.join(p, e)
                 sz = du(q) if os.path.isdir(q) and not os.path.islink(q) else os.lstat(q).st_size
                 rows.append((sz, e))
-                if os.path.isdir(q) and not os.path.islink(q) and e in ('.config', '.local'):
+                if os.path.isdir(q) and not os.path.islink(q) and e in ('.config', '.local', '.local/share'):
                     for e2 in os.listdir(q):
                         q2 = os.path.join(q, e2)
                         s2 = du(q2) if os.path.isdir(q2) and not os.path.islink(q2) else os.lstat(q2).st_size
                         rows.append((s2, e + '/' + e2))
-            for sz, e in sorted(rows, reverse=True)[:60]:
+                        if e == '.local' and e2 == 'share' and os.path.isdir(q2) and not os.path.islink(q2):
+                            for e3 in os.listdir(q2):
+                                q3 = os.path.join(q2, e3)
+                                s3 = du(q3) if os.path.isdir(q3) and not os.path.islink(q3) else os.lstat(q3).st_size
+                                rows.append((s3, '.local/share/' + e3))
+            for sz, e in sorted(rows, reverse=True)[:260]:
                 print('      %10s  %s' % (human(sz), mask(e)))
     print('== /root')
     rb = t.h('root')
@@ -331,11 +404,15 @@ def cmd_inventory(a):
     print('== /etc files that are not from a package or differ from it (names only)')
     n = 0
     for rel, st in sorted(walk(t.root, 'etc')):
-        if t.interesting(rel):
+        if t.interesting(rel) and not stat.S_ISLNK(st.st_mode):
             n += 1
-            if n <= 200:
+            if n <= 400:
                 print('   ', mask(rel))
-    print('   total: %d%s' % (n, '' if n <= 200 else ' (first 200 shown)'))
+    print('   total: %d%s' % (n, '' if n <= 400 else ' (first 400 shown)'))
+    print('== /opt directories not referenced by anything outside themselves (0 = unused)')
+    for nme, c in sorted(opt_references(t).items()):
+        if c == 0:
+            print('    %s' % nme)
     print('== non-free packages registered in dpkg')
     st = open(t.h('var/lib/dpkg/status'), errors='surrogateescape').read()
     for pkg in NONFREE_PACKAGES:
@@ -463,6 +540,31 @@ def cmd_scrub(a):
                 dst = os.path.join(newtmp, item)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 copy_filtered(src, dst, item, stats)
+        kept_small, dropped_small = [], []
+        for base in SMALL_DIR_BASES:
+            bdir = os.path.join(oldhome, base)
+            if not os.path.isdir(bdir) or os.path.islink(bdir):
+                continue
+            for e in sorted(os.listdir(bdir)):
+                q = os.path.join(bdir, e)
+                rel = base + '/' + e
+                if any(rel == k or rel.startswith(k + '/') for k in KEEP_HOME):
+                    continue
+                if any(fnmatch.fnmatch(e.lower(), pat.lower()) for pat in SMALL_DIR_DENY):
+                    dropped_small.append(rel)
+                    continue
+                sz = du(q) if os.path.isdir(q) and not os.path.islink(q) else os.lstat(q).st_size
+                if sz > SMALL_DIR_MAX:
+                    dropped_small.append('%s (%s)' % (rel, human(sz)))
+                    continue
+                dst = os.path.join(newtmp, rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                if copy_filtered(q, dst, rel, stats):
+                    kept_small.append(rel)
+        log('small config/data entries kept: ' + (', '.join(kept_small) or '(none)'))
+        log('entries not kept (denied by name or > 1 MiB): %d' % len(dropped_small))
+        for r in dropped_small:
+            log('   not kept: ' + r)
     for e in os.listdir(hb):
         if e != '.s9-new-home':
             remove_tree(os.path.join(hb, e))
@@ -481,6 +583,30 @@ def cmd_scrub(a):
         log('  dropped launcher: ' + r)
     for r in stats['big']:
         log('  dropped (>5 MiB): ' + r)
+
+    print('== scrub: backups/rollbacks of the author, default drops, secret files')
+    nb = 0
+    for top in ('etc', 'usr', 'var/lib'):
+        for rel, st in list(walk(t.root, top)):
+            if not rel.startswith(BACKUP_SCOPE) or rel.startswith(('etc/alternatives/', 'var/lib/dpkg', 'var/lib/apt', 'usr/lib/python3')):
+                continue
+            if BACKUP_RE.search(rel.rsplit('/', 1)[-1]) and norm(rel) not in t.owned:
+                os.unlink(t.h(rel))
+                nb += 1
+    log('%d unowned backup/rollback/disabled files removed' % nb)
+    for g in DEFAULT_DROP:
+        for rel, st in list(walk(t.root)):
+            if fnmatch.fnmatch(rel, g) and norm(rel) not in t.owned:
+                os.unlink(t.h(rel))
+                log('dropped: ' + rel)
+    for rel in SECRET_FILES:
+        p = t.h(rel)
+        if os.path.isfile(p):
+            lines = open(p, errors='surrogateescape').read().split('\n')
+            keep = [l for l in lines if l.startswith('#') or not l.strip()]
+            if len(keep) != len(lines):
+                open(p, 'w', errors='surrogateescape').write('\n'.join(keep).rstrip('\n') + '\n')
+                log('secrets removed from ' + rel)
 
     print('== scrub: non-free packages and /opt')
     status_path = t.h('var/lib/dpkg/status')
@@ -524,6 +650,12 @@ def cmd_scrub(a):
             sz = du(os.path.join(ob, e))
             remove_tree(os.path.join(ob, e))
             log('/opt/%s removed (%s)' % (e, human(sz)))
+    if a.prune_opt_unreferenced:
+        for nme, c in sorted(opt_references(t).items()):
+            if c == 0 and nme.startswith('s9-') and os.path.isdir(t.h('opt/' + nme)):
+                sz = du(t.h('opt/' + nme))
+                remove_tree(t.h('opt/' + nme))
+                log('/opt/%s removed: nothing references it (%s)' % (nme, human(sz)))
     for g in a.drop or []:
         for rel, st in list(walk(t.root)):
             if fnmatch.fnmatch(rel, g.lstrip('/')):
@@ -752,9 +884,11 @@ def cmd_audit(a):
                 add(block, 'Windows binary', rel)
             if unowned and not islink and rel.startswith(('usr/', 'lib/', 'opt/', 'srv/', 'boot/', 'var/lib/', 'bin/', 'sbin/')):
                 allowed = rel.startswith(ALLOW_UNOWNED) or any(g.search(rel) for g in GENERATED)
-                blobby = s.st_size > MIB or rel.lower().endswith(BLOB_EXT) or is_elf(p) or 'firmware' in rel
+                blobby = s.st_size > MIB or rel.lower().endswith(BLOB_EXT) or is_elf(p) or 'firmware' in rel.split('/')
                 if not allowed:
-                    if blobby:
+                    if blobby and any(fnmatch.fnmatch(rel, g) for g in (a.allow_blob or [])):
+                        add(review, 'ALLOWED BLOB: this image is for private tests only, never publish it', '%s (%s)' % (rel, human(s.st_size)))
+                    elif blobby:
                         add(block, 'unowned binary/firmware/large file outside the allow-list', '%s (%s)' % (rel, human(s.st_size)))
                     else:
                         k = '/'.join(rel.split('/')[:4])
@@ -792,8 +926,13 @@ def cmd_audit(a):
                 ms = [m for m in pat.finditer(txt)]
                 if name == 'e-mail address':
                     ms = [m for m in ms if not BENIGN_MAIL.search(m.group(0))]
+                if name in ('e-mail address', 'MAC address') and (rel.endswith(('.h', '.hpp', '.c', '.cc', '.cpp', '.pc')) or '/include/' in rel):
+                    ms = []
                 if ms:
                     add(review, name, '%s (%d)' % (rel, len(ms)))
+    for nme, c in sorted(opt_references(t).items()):
+        if c == 0 and nme.startswith('s9-'):
+            add(review, 'unreferenced /opt/s9-* directory (use --prune-opt-unreferenced)', nme)
     for k, v in sorted(unowned_by_top.items()):
         add(review, 'unowned small files not on the allow-list', '%s: %d files' % (k, v))
     # report
@@ -829,10 +968,11 @@ def main():
     p = sub.add_parser('inventory'); p.add_argument('tree'); p.add_argument('--old-user'); p.set_defaults(fn=cmd_inventory)
     p = sub.add_parser('scrub'); p.add_argument('tree'); p.add_argument('--user', required=True)
     p.add_argument('--old-user'); p.add_argument('--hostname', default='s9'); p.add_argument('--overlay')
-    p.add_argument('--keep-home', action='append'); p.add_argument('--drop', action='append'); p.set_defaults(fn=cmd_scrub)
+    p.add_argument('--keep-home', action='append'); p.add_argument('--drop', action='append')
+    p.add_argument('--prune-opt-unreferenced', action='store_true'); p.set_defaults(fn=cmd_scrub)
     p = sub.add_parser('audit'); p.add_argument('tree'); p.add_argument('--old-user')
     p.add_argument('--expect-user', required=True); p.add_argument('--halium-sha256'); p.add_argument('--report')
-    p.add_argument('--limit', type=int, default=12); p.set_defaults(fn=cmd_audit)
+    p.add_argument('--limit', type=int, default=12); p.add_argument('--allow-blob', action='append'); p.set_defaults(fn=cmd_audit)
     a = ap.parse_args()
     a.fn(a)
 

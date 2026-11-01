@@ -21,7 +21,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 DECOMP=${S9_DECOMPRESS:-zstd -dc}
 MODE=restore BACKUP= BOOT= OUT= LABEL= WORK= KEEP=0 EXTRA_MIB=1024 SKIP_VERIFY=0
-NEWUSER= HOSTNAME_NEW=s9 PWFILE= STOP_AUDIT=0 KEEP_HOME=() DROP=()
+NEWUSER= HOSTNAME_NEW=s9 PWFILE= STOP_AUDIT=0 KEEP_HOME=() DROP=() ALLOW_BLOB=() PRUNE=() PRIVATE=0
 HALIUM_SHA=527c53fd8e27957fe4046cd8588d689dec338e8abb6531af4602c2f235ca0944
 while [ $# -gt 0 ]; do
   case $1 in
@@ -41,6 +41,8 @@ while [ $# -gt 0 ]; do
     --keep-home) KEEP_HOME+=(--keep-home "$2"); shift 2;;
     --drop) DROP+=(--drop "$2"); shift 2;;
     --halium-sha256) HALIUM_SHA=$2; shift 2;;
+    --allow-blob) ALLOW_BLOB+=(--allow-blob "$2"); PRIVATE=1; shift 2;;
+    --prune-opt-unreferenced) PRUNE=(--prune-opt-unreferenced); shift;;
     -h|--help) sed -n '2,15p' "$0"; exit 0;;
     *) echo "unknown option: $1" >&2; exit 2;;
   esac
@@ -80,10 +82,10 @@ info "work dir: $WORK  (free $(human "$FREE"))"
 
 say "ext4 parameters of the phone's root"
 M=$BACKUP/meta/ext4-root.txt
-FEAT=$(sed -n 's/^Filesystem features: *//p' "$M" | tr -s ' ')
-BS=$(sed -n 's/^Block size: *//p' "$M"); ISZ=$(sed -n 's/^Inode size: *//p' "$M")
-PL=$(sed -n 's/^Filesystem volume name: *//p' "$M"); UUID=$(sed -n 's/^Filesystem UUID: *//p' "$M")
-[ -n "$FEAT" ] && [ -n "$BS" ] && [ -n "$ISZ" ] || die "cannot read features/block size/inode size from $M"
+FEAT=$(sed -n 's/^Filesystem features:[[:space:]]*//p' "$M" | tr -s '[:space:]' ' ' | sed 's/ $//')
+BS=$(sed -n 's/^Block size:[[:space:]]*//p' "$M" | tr -d '[:space:]'); ISZ=$(sed -n 's/^Inode size:[[:space:]]*//p' "$M" | tr -d '[:space:]')
+PL=$(sed -n 's/^Filesystem volume name:[[:space:]]*//p' "$M" | tr -d '[:space:]'); UUID=$(sed -n 's/^Filesystem UUID:[[:space:]]*//p' "$M" | tr -d '[:space:]')
+[[ $BS =~ ^[0-9]+$ ]] && [[ $ISZ =~ ^[0-9]+$ ]] && [ -n "$FEAT" ] || die "cannot read features/block size/inode size from $M"
 [ -n "$LABEL" ] || { LABEL=$PL; [ "$LABEL" != "<none>" ] || LABEL=s9root; }
 FEAT_LIST=$(echo "$FEAT" | tr ' ' '\n' | grep -vx 'needs_recovery' | paste -sd, -)
 info "features: $FEAT_LIST"
@@ -131,12 +133,12 @@ if [ "$MODE" = clean ]; then
   export S9_PASSWORD_HASH
   say "1d/5 scrubbing personal data and renaming the account"
   python3 -I "$HERE/audit-tree.py" scrub "$TREE" --user "$NEWUSER" --hostname "$HOSTNAME_NEW" \
-      --overlay "$HERE/clean-overlay" "${KEEP_HOME[@]}" "${DROP[@]}"
+      --overlay "$HERE/clean-overlay" "${KEEP_HOME[@]}" "${DROP[@]}" "${PRUNE[@]}"
   unset S9_PASSWORD_HASH
   say "1e/5 audit (blocking findings stop the build)"
   REPORT=$OUT/clean-report-$STAMP.txt
   python3 -I "$HERE/audit-tree.py" audit "$TREE" --old-user "$OLDUSER" --expect-user "$NEWUSER" \
-      --halium-sha256 "$HALIUM_SHA" --report "$REPORT" || {
+      --halium-sha256 "$HALIUM_SHA" --report "$REPORT" "${ALLOW_BLOB[@]}" || {
     info "the tree is kept in $TREE for inspection (delete it afterwards)"
     die "the audit found blocking problems; nothing was built"; }
   info "audit passed (REVIEW items above are for you to read)"
@@ -175,7 +177,8 @@ PARTS=$(cd "$WORK" && ls root.img.xz.part* | tr '\n' ' ' | sed 's/ $//')
 info "parts: $PARTS"
 
 say "4/5 assembling the ZIP"
-ZIP=$OUT/s9-$MODE-$STAMP.zip
+ZTAG=$MODE; [ "$PRIVATE" = 0 ] || ZTAG=$MODE-PRIVATE-do-not-publish
+ZIP=$OUT/s9-$ZTAG-$STAMP.zip
 SCRIPT=$WORK/update-binary
 sed -e "s|@MODE@|$MODE|g" -e "s|@BOOT_SIZE@|$BOOT_SIZE|" -e "s|@BOOT_SHA256@|$BOOT_SHA|" \
     -e "s|@RAW_SIZE@|$RAW_SIZE|" -e "s|@RAW_SHA256@|$RAW_SHA|" -e "s|@PARTS@|$PARTS|" \
