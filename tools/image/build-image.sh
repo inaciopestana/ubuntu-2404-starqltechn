@@ -123,6 +123,7 @@ if [ "$MODE" = clean ]; then
   python3 -I "$HERE/audit-tree.py" inventory "$TREE" | tee "$WORK/inventory.txt" | head -n 330
   OLDUSER=$(awk -F: '$3==1000{print $1; exit}' "$TREE/etc/passwd")
   [ -n "$OLDUSER" ] || die "no account with uid 1000 in the tree"
+  OLDHOST=$(head -n1 "$TREE/etc/hostname" 2>/dev/null | tr -d '[:space:]')
   OVERLAYS=(--overlay "$HERE/clean-overlay") FB_SCRUB=() FB_AUDIT=()
   if [ "$FIRSTBOOT" = 1 ]; then
     say "1c/5 account: a locked placeholder; the user's name, password and host name are asked on the first boot"
@@ -150,7 +151,7 @@ if [ "$MODE" = clean ]; then
   unset S9_PASSWORD_HASH
   say "1e/5 audit (blocking findings stop the build)"
   REPORT=$OUT/clean-report-$STAMP.txt
-  python3 -I "$HERE/audit-tree.py" audit "$TREE" --old-user "$OLDUSER" --expect-user "$NEWUSER" "${FB_AUDIT[@]}" \
+  python3 -I "$HERE/audit-tree.py" audit "$TREE" --old-user "$OLDUSER" --old-hostname "$OLDHOST" --expect-user "$NEWUSER" "${FB_AUDIT[@]}" \
       --halium-sha256 "$HALIUM_SHA" --report "$REPORT" "${ALLOW_BLOB[@]}" || {
     info "the tree is kept in $TREE for inspection (delete it afterwards)"
     die "the audit found blocking problems; nothing was built"; }

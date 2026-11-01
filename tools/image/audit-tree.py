@@ -92,6 +92,7 @@ SECRET_REVIEW = {
     'MAC address': re.compile(r'\b(?!00:00:00:00:00:00|ff:ff:ff:ff:ff:ff)(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b'),
     '15-digit number (IMEI?)': re.compile(r'(?<![0-9.])\d{15}(?![0-9.])'),
 }
+PRIVATE_IP = re.compile(r'(?<![0-9.])(?:192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(?![0-9])')
 BENIGN_MAIL = re.compile(r'@(?:ubuntu|canonical|debian|gnu|kernel|lists\.|freedesktop|gnome|xfce|mozilla|google|github|gitlab|redhat|suse|qualcomm|linaro|ubports|gmx|apache|python|x\.org|nvidia|intel|amd)', re.I)
 
 
@@ -461,6 +462,10 @@ def copy_filtered(src, dst, relname, stats):
     if st.st_size > MAX_KEPT_FILE:
         stats['big'].append(relname)
         return False
+    if relname.startswith('Desktop/') and not relname.endswith('.desktop') \
+            and not any(relname == k or relname.startswith(k + '/') for k in stats['explicit']):
+        stats['desktop'].append(relname)     # notes, scripts and pastes on the desktop are personal: only launchers stay
+        return False
     if (relname.startswith('Desktop/') or relname.startswith('.local/share/applications/')) and relname.endswith('.desktop'):
         txt = read_text_file(src) or ''
         if LAUNCHER_DENY.search(txt):
@@ -528,6 +533,10 @@ def cmd_scrub(a):
         os.symlink('/etc/machine-id', dm)
     log('machine-id emptied (systemd makes a new one at the first boot); ssh host keys removed')
 
+    for d in ('media', 'mnt'):          # mount points left by the author's SD card or USB drives (their names carry the user name)
+        k = clear_dir(t.h(d))
+        if k:
+            log('emptied /%s (%d entries)' % (d, k))
     print('== scrub: /root and /home')
     rb = t.h('root')
     if os.path.isdir(rb):
@@ -536,7 +545,7 @@ def cmd_scrub(a):
                 remove_tree(os.path.join(rb, e))
     hb = t.h('home')
     os.makedirs(hb, exist_ok=True)
-    stats = {'denied': 0, 'big': [], 'launchers': []}
+    stats = {'denied': 0, 'big': [], 'launchers': [], 'desktop': [], 'explicit': set(a.keep_home or [])}
     oldhome = os.path.join(hb, old)
     newtmp = os.path.join(hb, '.s9-new-home')
     remove_tree(newtmp)
@@ -589,6 +598,8 @@ def cmd_scrub(a):
         % (stats['denied'], len(stats['big']), len(stats['launchers'])))
     for r in stats['launchers']:
         log('  dropped launcher: ' + r)
+    for r in stats['desktop']:
+        log('  dropped from Desktop (not a launcher): ' + r)
     for r in stats['big']:
         log('  dropped (>5 MiB): ' + r)
 
@@ -874,6 +885,9 @@ def cmd_audit(a):
     def add(d, key, item):
         d.setdefault(key, []).append(item)
 
+    oldhost_rx = None
+    if a.old_hostname and len(a.old_hostname) >= 4 and a.old_hostname.lower() != 's9':
+        oldhost_rx = re.compile(r'(?<![A-Za-z0-9-])%s(?![A-Za-z0-9-])' % re.escape(a.old_hostname), re.I)
     rx = None
     if old and old != new:
         rx, _ = user_regex(old)
@@ -921,6 +935,10 @@ def cmd_audit(a):
         f = l.split(':')
         if len(f) > 1 and f[0] != new and f[1] not in ('*', '!', '!!', ''):
             add(block, 'password hash of an account other than the new user', f[0])
+    for d in ('media', 'mnt'):
+        dd = t.h(d)
+        if os.path.isdir(dd) and not os.path.islink(dd) and os.listdir(dd):
+            add(block, 'mount point directory not empty (carries the author\'s names)', d + '/: ' + ', '.join(sorted(os.listdir(dd))[:5]))
     # forbidden paths and non-free packages
     for g in FORBIDDEN_PATHS:
         d, base = os.path.split(g)
@@ -998,6 +1016,11 @@ def cmd_audit(a):
                 continue
             if rx and rx.search(txt):
                 add(block, 'old user name in file content', rel)
+            if rel.startswith(('home/', 'root/')):
+                if PRIVATE_IP.search(txt):
+                    add(block, 'private network address in a personal file', rel)
+            if oldhost_rx and oldhost_rx.search(txt):
+                add(block if rel.startswith(('home/', 'root/')) else review, 'old host name in file content', rel)
             if rel in ('etc/shadow', 'etc/gshadow'):
                 continue
             for name, pat in SECRET_BLOCK.items():
@@ -1055,7 +1078,7 @@ def main():
     p.add_argument('--keep-home', action='append'); p.add_argument('--drop', action='append')
     p.add_argument('--prune-opt-unreferenced', action='store_true'); p.set_defaults(fn=cmd_scrub)
     p = sub.add_parser('audit'); p.add_argument('tree'); p.add_argument('--old-user')
-    p.add_argument('--expect-user', required=True); p.add_argument('--first-boot-account', action='store_true'); p.add_argument('--halium-sha256'); p.add_argument('--report')
+    p.add_argument('--old-hostname'); p.add_argument('--expect-user', required=True); p.add_argument('--first-boot-account', action='store_true'); p.add_argument('--halium-sha256'); p.add_argument('--report')
     p.add_argument('--limit', type=int, default=12); p.add_argument('--allow-blob', action='append'); p.set_defaults(fn=cmd_audit)
     a = ap.parse_args()
     a.fn(a)
