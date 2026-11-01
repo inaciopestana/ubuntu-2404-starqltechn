@@ -1,0 +1,12 @@
+[Unit]
+Description=Galaxy S9: copy the Adreno 630 firmware from the phone's own vendor partition
+After=local-fs.target
+Before=s9-miral-nested.service display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/s9-install-gpu-firmware
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

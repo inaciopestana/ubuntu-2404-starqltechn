@@ -46,7 +46,9 @@ NONFREE_PACKAGES = ['google-chrome-stable', 'google-chrome-beta', 'google-chrome
                     'microsoft-edge-stable', 'claude-desktop',                                   # not part of the image
                     'hangover-wine', 'hangover-libarm64ecfex', 'hangover-libwow64fex', 'hangover-wowbox64']
 DEFAULT_DROP = ['usr/local/bin/wine*', 'usr/local/bin/regedit', 'usr/bin/qemu-*-static', 'usr/local/sbin/*wine*',
-                'etc/ssh/sshd_config.d/*debug-root*']
+                'etc/ssh/sshd_config.d/*debug-root*',
+                # Adreno 630 firmware: Samsung/Qualcomm files, restored at first boot from the phone's own vendor partition
+                'usr/lib/firmware/a630_sqe.fw', 'usr/lib/firmware/a630_gmu.bin']
 SECRET_FILES = ['etc/ppp/chap-secrets', 'etc/ppp/pap-secrets']       # keep only the comment lines
 BACKUP_RE = re.compile(r'\.(before|pre|bak|backup|orig|old|rollback|disabled|superseded|save|dpkg-old|dpkg-new|'
                        r'dpkg-dist|dpkg-bak|ucf-old|ucf-new|ucf-dist)([-._~].*)?$|~$')

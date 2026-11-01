@@ -22,6 +22,9 @@ upstream components and asserts no ownership over them.
 * The Halium Android container image `android-rootfs.img` (Halium 10, build 1439). The copy used
   by the author is identical to the one in the V7 release of `Gustavo2Toledo/ubuntu-touch-star2qltechn`,
   which carries no licence; it is therefore only referenced (see `docs/installing.md`, step 5.3).
+* The Adreno 630 GPU firmware (`a630_sqe.fw`, `a630_gmu.bin`). These are Qualcomm files that Samsung ships in the phone's
+  `vendor` partition. Images built by `tools/image/` leave them out, and a first-boot service
+  (`s9-install-gpu-firmware`) copies them from **your own phone's** vendor partition (`/android/vendor/firmware`).
 * Google Chrome and the Mesa KGSL package from *ImPeekaboo/mesa-a630-kgsl*; they are referenced and installed from their original sources.
 
 ## Credits

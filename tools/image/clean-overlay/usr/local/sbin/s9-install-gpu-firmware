@@ -1,0 +1,27 @@
+#!/bin/bash
+# s9-install-gpu-firmware - give the Adreno 630 its firmware, taken from THIS phone's own vendor partition.
+#
+# a630_sqe.fw and a630_gmu.bin are Qualcomm/Samsung files. They are not shipped with this image; the phone
+# already carries them in its (untouched) Samsung vendor partition, which the ramdisk mounts at /android/vendor.
+# This script copies them to /usr/lib/firmware when they are missing, at every boot, before the desktop starts.
+# Never fails the boot: it logs and exits 0.
+FW_DST="${S9_FIRMWARE_DIR:-/usr/lib/firmware}"
+STATE="${S9_GPU_FW_STATE:-/var/lib/s9-gpu-firmware-v1}"
+SRC_DIRS="${S9_VENDOR_FW_DIRS:-/android/vendor/firmware /vendor/firmware}"
+LOG="${S9_GPU_FW_LOG:-/var/log/s9-gpu-firmware.log}"
+say() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
+
+mkdir -p "$FW_DST" "$STATE" 2>/dev/null
+for F in a630_sqe.fw a630_gmu.bin; do
+  if [ -s "$FW_DST/$F" ]; then say "$F: already installed, left alone"; continue; fi
+  FOUND=""
+  for D in $SRC_DIRS; do [ -s "$D/$F" ] && { FOUND="$D/$F"; break; }; done
+  if [ -z "$FOUND" ]; then say "$F: NOT found in: $SRC_DIRS (the GPU may not start; is the vendor partition mounted?)"; continue; fi
+  if install -m 0644 -o root -g root "$FOUND" "$FW_DST/$F.tmp" && mv -f "$FW_DST/$F.tmp" "$FW_DST/$F"; then
+    H=$(sha256sum "$FW_DST/$F" | cut -d' ' -f1); echo "$H" > "$STATE/$F.sha256"
+    say "$F: copied from $FOUND (sha256 $H)"
+  else
+    rm -f "$FW_DST/$F.tmp"; say "$F: copy from $FOUND FAILED"
+  fi
+done
+exit 0
