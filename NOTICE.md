@@ -11,7 +11,9 @@ upstream components and asserts no ownership over them.
 | `shell/` | Mir `miral-shell` example | GPL-3 (Canonical Ltd.) |
 | `platform/patches/` | `ubports/development/core/hybris-support/mir-android2-platform` | GPL / LGPL (see its `COPYING.*`) |
 | `xwayland/` | X.Org Xwayland 24.1.6 + `lfdevs/xwayland` series | MIT/X11 |
-| `kernel/patches/`, `kernel/halium.config` | Linux kernel (Samsung sdm845 tree via `FakeShell/android_kernel_samsung_sdm845`) | GPL-2.0 only |
+| `kernel/patches/`, `kernel/halium.config` | Linux kernel (Samsung sdm845 tree via [`FakeShell/android_kernel_samsung_sdm845`](https://github.com/FakeShell/android_kernel_samsung_sdm845), branch `ubports`) | GPL-2.0 only |
+| (credit, not copied) | [`Andrey0800770/samsung_sdm845-kernel`](https://github.com/Andrey0800770/samsung_sdm845-kernel/releases) S9 kernel releases (4.9.337, KernelSU/SUSFS) and the [XDA thread/post](https://xdaforums.com/t/kernel-upstream-kernelsu-susfs-s9-s9-n9-chn-usa.4703239/post-90032616) where `multidisabler` and `forceencrypt_remover_q` are obtained | as upstream |
+| (not shipped) | Original recovery [`twrp-3.7.0_9-0-starqltechn.img`](https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html) (TeamWin, GPL-3.0 and others); users download it and patch it with `tools/twrp/` | as upstream |
 | `kernel/deviceinfo`, `kernel/halium-graft/` | UBports/Halium community-port tooling and the `Gustavo2Toledo/ubuntu-touch-star2qltechn` S9+ port | as upstream |
 
 ## Not included, on purpose

@@ -24,7 +24,7 @@ index 10882bc..f937e71 100755
  fi
  
 +# STAR2_FORCE_SECOND_ADDR_BEGIN
-+# Alguns bootloaders Samsung exigem second_addr mesmo sem um second payload.
++# Some Samsung bootloaders require second_addr even without a second payload.
 +if [ "${deviceinfo_bootimg_force_second_address:-false}" = "true" ]; then
 +    python3 - "$OUT" "$deviceinfo_flash_offset_base" "$deviceinfo_flash_offset_second" <<'PY_STAR2_SECOND_ADDR'
 +import struct
@@ -35,12 +35,12 @@ index 10882bc..f937e71 100755
 +
 +with open(image, "r+b") as boot:
 +    if boot.read(8) != b"ANDROID!":
-+        raise RuntimeError("boot.img sem cabecalho ANDROID!")
++        raise RuntimeError("boot.img has no ANDROID! header")
 +
 +    boot.seek(28)
 +    boot.write(struct.pack("<I", address))
 +
-+print("Samsung second_addr aplicado: 0x%08x" % address)
++print("Samsung second_addr applied: 0x%08x" % address)
 +PY_STAR2_SECOND_ADDR
 +fi
 +# STAR2_FORCE_SECOND_ADDR_END

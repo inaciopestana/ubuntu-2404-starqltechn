@@ -23,7 +23,8 @@ own releases.
 
 ## Usage
 
-1. Dump or download the TWRP image you already use (a dump of the `recovery` partition works; it is 72,339,456 bytes).
+1. Get the original recovery to patch: download [`twrp-3.7.0_9-0-starqltechn.img`](https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html) from twrp.me (or dump the
+   `recovery` partition of a phone that already runs it; the dump is 72,339,456 bytes).
 2. On the PC, with `magiskboot` from the Magisk project:
 
    ```

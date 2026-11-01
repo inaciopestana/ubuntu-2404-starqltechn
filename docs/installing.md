@@ -10,7 +10,9 @@
 ## 0. What you need
 * **Samsung Galaxy S9 SM-G9600** (Snapdragon 845). Not the Exynos models; not the S9+ (SM-G9650)
   without changes (the board name, partition numbers and firmware differ).
-* **Unlocked bootloader** and **TWRP** for `starqltechn`. (Unlocking wipes the phone.)
+* **Unlocked bootloader** and **TWRP** for `starqltechn`: download the original [`twrp-3.7.0_9-0-starqltechn.img`](https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html)
+  and patch it with [`tools/twrp/`](../tools/twrp/README.md) so it keeps its settings. (Unlocking wipes the phone.)
+* **`multidisabler` and `forceencrypt_remover_q`**, flashed in that TWRP: download them from [this XDA post](https://xdaforums.com/t/kernel-upstream-kernelsu-susfs-s9-s9-n9-chn-usa.4703239/post-90032616).
 * **Samsung stock firmware on the phone, left untouched.** The author's phone runs the last stock
   update for this model: build `G9600ZHU9FVF2` (Android 10, `QP1A.190711.020`, security patch
   2022-05-01). The `system` and `vendor` partitions and the modem firmware stay as Samsung shipped them
@@ -43,16 +45,21 @@ Also keep a stock Odin firmware package for your exact model/region so you can r
 ```sh
 git clone <URL of this repository> s9-ubports
 git clone --branch ubports https://github.com/FakeShell/android_kernel_samsung_sdm845   # kernel
+git -C android_kernel_samsung_sdm845 checkout a22a0b358140                               # the base the patches were made on
 ```
 Set `S9_WORK` to a working directory; scripts use it (`kernel/scripts/*.sh`).
 
 ## 3. Kernel and boot image
-The kernel is Samsung's 4.9 tree with Halium options and three local patches.
+The kernel is Samsung's 4.9 tree (FakeShell's `ubports` branch, Linux 4.9.186) with Halium options and three patches
+([`kernel/patches/`](../kernel/patches/README.md)): HEVC encoder profile fix, Bluetooth profiles, DisplayPort 3840x1080 and no HDCP.
 ```sh
 cd android_kernel_samsung_sdm845
-git apply ../s9-ubports/kernel/patches/s9-secdp-ultrawide-32-9.patch   # 3840x1080 over DisplayPort
+for p in ../s9-ubports/kernel/patches/000*.patch; do git apply "$p" || break; done
 # defconfig: starqlte_chn_halium_defconfig + kernel/halium.config
 ```
+* Other kernel bases for this phone: Andrey0800770's [`samsung_sdm845-kernel` releases](https://github.com/Andrey0800770/samsung_sdm845-kernel/releases) (Linux 4.9.337,
+  KernelSU + SUSFS; [`starqltechn-v4.9.337-Rel11.zip`](https://github.com/Andrey0800770/samsung_sdm845-kernel/releases/download/V4.9.337-011-susfs4ksu/starqltechn-v4.9.337-Rel11.zip)). This repository's patches were made and tested on the
+  FakeShell tree only; they have not been rebased onto Andrey's.
 * Build with the **Android GCC 4.9** cross compiler (`aarch64-linux-android-`) **inside an
   Ubuntu 22.04 chroot** (`debootstrap jammy /opt/ubuntu2204`, enter with `systemd-nspawn`): the
   `make` of a very new distribution fails in `scripts/Makefile.lib`.

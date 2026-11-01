@@ -15,8 +15,9 @@
   `mode:` in the Mir display config cannot change the mode by itself. The kernel therefore
   lists only the ultrawide mode.
 
-## The patch (`kernel/patches/s9-secdp-ultrawide-32-9.patch`)
-* Enables the two macros.
+## The patch (`kernel/patches/0003-msm-dp-ultrawide-3840x1080-and-no-hdcp.patch`)
+* Enables the two macros (and defines `SECDP_HDCP_DISABLE`: the TrustZone never authenticates HDCP here, and the
+  re-authentication loop cost about a quarter of one CPU core).
 * `dp_connector_get_modes`: if the sink offers 3840x1080, synthesize 3840x1080@60 with
   `drm_cvt_mode(..., 60, reduced=true)` and enable a filter.
 * `dp_connector_mode_valid`: reject anything that is not 3840x1080 at the chosen rate

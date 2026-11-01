@@ -1,0 +1,114 @@
+From: Ubuntu Touch star2qltechn port
+Subject: [PATCH 3/3] drm/msm/dp: 3840x1080 over DisplayPort, HDCP off
+
+Enables the Samsung SECDP_WIDE_32_9_SUPPORT and SECDP_HIGH_REFRESH_SUPPORT
+switches, adds a synthesized CVT 3840x1080@60 mode when the sink offers
+3840x1080 without a 60 Hz entry, and adds the s9_uw_hz module parameter (default
+60, 0 = off): when the sink has 3840x1080 at that rate, every other mode is
+rejected in dp_connector_mode_valid(). Also defines SECDP_HDCP_DISABLE: the
+TrustZone never authenticates HDCP here and the re-authentication loop cost
+about a quarter of one CPU core.
+---
+diff --git a/drivers/gpu/drm/msm/dp/dp_drm.c b/drivers/gpu/drm/msm/dp/dp_drm.c
+index 799f63e61d1d..5f1c81bb0b9b 100644
+--- a/drivers/gpu/drm/msm/dp/dp_drm.c
++++ b/drivers/gpu/drm/msm/dp/dp_drm.c
+@@ -416,6 +416,14 @@ void dp_connector_post_open(void *display)
+ 		dp->post_open(dp);
+ }
+ 
++#if defined(CONFIG_SEC_DISPLAYPORT) && defined(SECDP_WIDE_32_9_SUPPORT) /* S9-UW-V3 decl */
++#include <linux/moduleparam.h>
++/* S9: with a 32:9 (3840x1080) sink, expose ONLY that mode at the requested rate (0 = filter off) */
++static int s9_uw_hz = 60;
++module_param_named(s9_uw_hz, s9_uw_hz, int, 0644);
++static bool s9_uw_sink;
++#endif
++
+ int dp_connector_get_modes(struct drm_connector *connector,
+ 		void *display)
+ {
+@@ -454,7 +462,48 @@ int dp_connector_get_modes(struct drm_connector *connector,
+ 			m->height_mm = connector->display_info.height_mm;
+ 			drm_mode_probed_add(connector, m);
+ 		}
++#if defined(CONFIG_SEC_DISPLAYPORT) && defined(SECDP_WIDE_32_9_SUPPORT) /* S9-UW-V3 modes */
++        {
++            struct drm_display_mode *pm, *m60;
++            bool has_1080 = false, has_60 = false;
++
++            list_for_each_entry(pm, &connector->probed_modes, head) {
++                if (pm->hdisplay == 3840 && pm->vdisplay == 1080) {
++                    has_1080 = true;
++                    if (drm_mode_vrefresh(pm) == 60)
++                        has_60 = true;
++                }
++            }
++            if (has_1080 && !has_60) {
++                m60 = drm_cvt_mode(connector->dev, 3840, 1080, 60, true, false, false);
++                if (m60) {
++                    m60->type = DRM_MODE_TYPE_DRIVER;
++                    m60->width_mm = connector->display_info.width_mm;
++                    m60->height_mm = connector->display_info.height_mm;
++                    drm_mode_probed_add(connector, m60);
++                    rc++;
++                }
++            }
++            /* S9-UW-V4: filter only if 3840x1080 exists at the requested rate; otherwise let every mode through */
++            s9_uw_sink = false;
++            if (has_1080 && s9_uw_hz > 0) {
++                list_for_each_entry(pm, &connector->probed_modes, head) {
++                    if (pm->hdisplay == 3840 && pm->vdisplay == 1080 &&
++                        abs(drm_mode_vrefresh(pm) - s9_uw_hz) <= 1) {
++                        s9_uw_sink = true;
++                        break;
++                    }
++                }
++            }
++            pr_info("[drm-dp] S9-UW: sink 3840x1080=%d, cvt60=%s, s9_uw_hz=%d, filter=%s\n",
++                    has_1080, (has_1080 && !has_60) ? "added" : "no", s9_uw_hz,
++                    s9_uw_sink ? "on" : "off");
++        }
++#endif
+ 	} else {
++#if defined(CONFIG_SEC_DISPLAYPORT) && defined(SECDP_WIDE_32_9_SUPPORT) /* S9-UW-V3 reset */
++        s9_uw_sink = false;
++#endif
+ 		pr_err("No sink connected\n");
+ 	}
+ 	kfree(dp_mode);
+@@ -781,6 +830,12 @@ enum drm_mode_status dp_connector_mode_valid(struct drm_connector *connector,
+ 	debug = dp_disp->get_debug(dp_disp);
+ 
+ 	mode->vrefresh = drm_mode_vrefresh(mode);
++#if defined(CONFIG_SEC_DISPLAYPORT) && defined(SECDP_WIDE_32_9_SUPPORT) /* S9-UW-V3 filter */
++    if (s9_uw_hz > 0 && s9_uw_sink &&
++        !(mode->hdisplay == 3840 && mode->vdisplay == 1080 &&
++          abs(mode->vrefresh - s9_uw_hz) <= 1))
++        return MODE_BAD;
++#endif
+ 
+ #ifndef CONFIG_SEC_DISPLAYPORT
+ 	if (mode->clock > dp_disp->max_pclk_khz)
+diff --git a/drivers/gpu/drm/msm/dp/secdp.h b/drivers/gpu/drm/msm/dp/secdp.h
+index c2c81b94edd3..e87adee4f021 100644
+--- a/drivers/gpu/drm/msm/dp/secdp.h
++++ b/drivers/gpu/drm/msm/dp/secdp.h
+@@ -32,14 +32,14 @@
+ #define SECDP_ENUM_STR(x)	#x
+ #define dim(x)			((sizeof(x))/(sizeof(x[0])))
+ 
+-/*#define SECDP_HDCP_DISABLE*/
++#define SECDP_HDCP_DISABLE			/* S9-HDCP-V5: no HDCP on DP; the TrustZone never authenticates and the re-authentication loop (~2.7 failures/s) cost ~24% of one core */
+ /*#define NOT_SUPPORT_DEX_RES_CHANGE*/
+ /*#define SECDP_CALIBRATE_VXPX*/			/* debug for calibrating voltage_level, pre-emphasis_level */
+ /*#define SECDP_OPTIMAL_LINK_RATE*/			/* use optimum link_rate, not max link_rate */
+ #define SECDP_WIDE_21_9_SUPPORT				/* support ultra-wide 21:9 resolution (2560x1080p, 3440x1440p) */
+-/*#define SECDP_WIDE_32_9_SUPPORT*/			/* support ultra-wide 32:9 resolution (3840x1080p) */
++#define SECDP_WIDE_32_9_SUPPORT			/* support ultra-wide 32:9 resolution (3840x1080p) */
+ /*#define SECDP_WIDE_32_10_SUPPORT*/		/* support ultra-wide 32:10 resolution (3840x1200p) */
+-/*#define SECDP_HIGH_REFRESH_SUPPORT*/		/* support more than 60hz refresh rate, such as 100/120/144hz */
++#define SECDP_HIGH_REFRESH_SUPPORT		/* support more than 60hz refresh rate, such as 100/120/144hz */
+ 
+ #define LEN_BRANCH_REVISION		3
+ #define DPCD_BRANCH_HW_REVISION			0x509

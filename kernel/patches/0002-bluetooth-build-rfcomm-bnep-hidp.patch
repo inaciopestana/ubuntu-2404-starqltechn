@@ -1,0 +1,28 @@
+From: Ubuntu Touch star2qltechn port
+Subject: [PATCH 2/3] Bluetooth: build RFCOMM, BNEP and HIDP
+
+Samsung commented the rfcomm/, bnep/ and hidp/ directories out of
+net/bluetooth/Makefile, so CONFIG_BT_RFCOMM, CONFIG_BT_BNEP and CONFIG_BT_HIDP
+(already selected by kernel/halium.config) built nothing. Without them Ubuntu
+cannot use serial profiles, Bluetooth tethering or keyboards/mice/gamepads.
+---
+diff --git a/net/bluetooth/Makefile b/net/bluetooth/Makefile
+index 7f0430357226..8b4c1fd4b17a 100644
+--- a/net/bluetooth/Makefile
++++ b/net/bluetooth/Makefile
+@@ -2,11 +2,12 @@
+ # Makefile for the Linux Bluetooth subsystem.
+ #
+ 
++# S9-BT-V6: RFCOMM/BNEP/HIDP re-enabled (Samsung left them out of the Makefile; the .config already selects them)
+ obj-$(CONFIG_BT)	+= bluetooth.o
+-#obj-$(CONFIG_BT_RFCOMM)	+= rfcomm/
+-#obj-$(CONFIG_BT_BNEP)	+= bnep/
++obj-$(CONFIG_BT_RFCOMM)	+= rfcomm/
++obj-$(CONFIG_BT_BNEP)	+= bnep/
+ obj-$(CONFIG_BT_CMTP)	+= cmtp/
+-#obj-$(CONFIG_BT_HIDP)	+= hidp/
++obj-$(CONFIG_BT_HIDP)	+= hidp/
+ obj-$(CONFIG_BT_6LOWPAN) += bluetooth_6lowpan.o
+ 
+ bluetooth_6lowpan-y := 6lowpan.o

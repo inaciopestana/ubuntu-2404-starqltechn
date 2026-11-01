@@ -99,8 +99,8 @@ echo "[kernel] copying allowlisted files"
 mkdir -p "$OUT/kernel/patches" "$OUT/kernel/scripts" "$OUT/kernel/halium-graft"
 cp "$WORK/deviceinfo"                      "$OUT/kernel/deviceinfo"
 cp "$WORK/kernel-config/halium.config"     "$OUT/kernel/halium.config"
-cp "$WORK"/patches/s9-secdp-ultrawide-32-9.patch "$OUT/kernel/patches/"
-cp "$WORK"/patches/000[12]-*.patch         "$OUT/kernel/patches/"
+# the kernel patches are maintained in the repository (kernel/patches/), regenerated from `git diff` of the kernel tree;
+# they are no longer copied from the work directory.
 for f in s9-kbuild5.sh s9-kpatch5.sh s9-flash-boot5.sh; do cp "$WORK/scripts/$f" "$OUT/kernel/scripts/"; done
 cp "$WORK/check-ubuntu2404-config.sh" "$WORK/build-rootfs-stage1.sh" "$OUT/kernel/scripts/"
 ( cd "$WORK/tools/halium-graft" && tar cf - --exclude=__pycache__ --exclude='*.bak*' --exclude='*.pyc' . ) \

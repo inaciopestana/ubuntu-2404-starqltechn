@@ -19,15 +19,23 @@ Five steps, in this order. Details, risks and the way back are in [`docs/install
 2. **Unlock the bootloader** (Developer options > OEM unlocking, then the download-mode unlock). This wipes the phone and
    trips Knox.
 3. **Install the custom TWRP that keeps its settings in `/cache`** (see [`tools/twrp/`](tools/twrp/README.md)).
+   Download the original recovery to patch from TWRP: [`twrp-3.7.0_9-0-starqltechn.img`](https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html).
    Ubuntu lives in a dedicated image inside the `userdata` partition, so TWRP cannot keep its settings there; the
    patched recovery stores them on `/cache` instead (one flag in `recovery.fstab`).
-4. **In that TWRP, flash `multidisabler` and `forceencrypt_remover_q`** (two ZIPs, one after the other). They turn off
+4. **In that TWRP, flash `multidisabler` and `forceencrypt_remover_q`** (two ZIPs, one after the other; download them from
+   [this XDA post](https://xdaforums.com/t/kernel-upstream-kernelsu-susfs-s9-s9-n9-chn-usa.4703239/post-90032616) in the S9/N9 KernelSU-SUSFS kernel thread). They turn off
    Samsung's boot-time integrity checks and the forced encryption of `userdata`, which get in the way of a custom boot and root image.
 5. **In the same TWRP, flash the Ubuntu ZIP.** It carries the boot image and the Ubuntu root image (the Halium Android
    container is inside the root image), and it writes them with read-back checks. Keep the ZIP on a **microSD card or
    USB-OTG drive, never on the internal storage**: the ZIP overwrites `userdata`, and the installer refuses to run from it.
    Build the ZIP yourself with [`tools/image/build-image.sh`](tools/image/build-image.sh); a ready-made release is not published yet.
 
+> **Kernel.** The boot image is built from FakeShell's [`android_kernel_samsung_sdm845`](https://github.com/FakeShell/android_kernel_samsung_sdm845)
+> (branch `ubports`, Linux 4.9.186, base commit `a22a0b358140`) plus the patches in [`kernel/patches/`](kernel/patches/README.md).
+> Andrey0800770's [`samsung_sdm845-kernel` releases](https://github.com/Andrey0800770/samsung_sdm845-kernel/releases) (Linux 4.9.337 with KernelSU/SUSFS, file
+> [`starqltechn-v4.9.337-Rel11.zip`](https://github.com/Andrey0800770/samsung_sdm845-kernel/releases/download/V4.9.337-011-susfs4ksu/starqltechn-v4.9.337-Rel11.zip)) are credited here as the S9 kernel base the author points to;
+> the kernel that this repository's patches were made on and that the boot image is compiled from is the FakeShell one.
+>
 > The five steps describe the author's setup on one phone. The patched TWRP and the two ZIPs of step 4 are the
 > author's choice; the Ubuntu ZIP of step 5 has been built and checked on a PC but **not yet flashed on a phone**, and
 > nobody else has repeated any step.
