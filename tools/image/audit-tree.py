@@ -830,7 +830,10 @@ def cmd_scrub(a):
         os.makedirs(wants, exist_ok=True)
         for odir in a.overlay:
             for dirpath, dirs, files in os.walk(odir):
+                dirs[:] = [d for d in dirs if d != '__pycache__']      # byte-code of a test run is not part of the overlay
                 for fn in files:
+                    if fn.endswith('.pyc'):
+                        continue
                     src = os.path.join(dirpath, fn)
                     rel = os.path.relpath(src, odir)
                     dst = t.h(rel)
