@@ -20,7 +20,7 @@ product.
                        └─ XFCE 4.18 session, Docklike taskbar, Chrome, Thunar, ...
  audio   : PulseAudio with the droid modules (HIDL) talking to the Android audio HAL
  phone   : ofono-sailfish + binder plugin -> Android radio HAL
- extras  : s9-panel tray launcher, DeX fan control, screen cast, clipboard bridge, Wine/box64
+ extras  : s9-panel tray launcher, DeX fan control, screen cast, clipboard bridge
 ```
 Why nested? The Android HWC allows exactly one client to own the display. Lomiri's system
 compositor is that client, and a second Mir instance runs inside it so that the desktop can be
@@ -47,7 +47,7 @@ restarted without losing the display and so that window-management code can be c
 | 7-14 | nested MirAL desktop integrated (Oct 7); gralloc fixes, software cursor, host-pointer lock/confine work (Oct 14) |
 | 16-21 | XFCE panel popup/menu placement and calendar popups (libs v23/v24); shell V25+ (maximize, Chrome docklike, keyboard/scroll input V33) |
 | 20-21 | 3840x1080 over DisplayPort; Chrome GPU diagnostics; mobile data via ofono; tray menus close fast |
-| 22 | clipboard bridge; notifications; Bluetooth/NM tray; Wine under box64; calls/SMS app; fan controller |
+| 22 | clipboard bridge; notifications; Bluetooth/NM tray; calls/SMS app; fan controller |
 | 25-27 | ADSP/boot reliability; screen cast (SRT/Cast/DLNA/Miracast); full-screen without panel; window frames for panel dialogs; native Freedreno GL via gralloc Xwayland |
 | 28-31 | crash guards in the Mir lib (v49-v51); tray panel; Alt+Tab; Thunar pin; idle-CPU cleanup |
 

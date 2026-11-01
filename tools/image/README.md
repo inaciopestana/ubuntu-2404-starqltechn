@@ -12,7 +12,7 @@ sudo tools/image/build-image.sh --backup ~/s9-backups/<backup> --boot <boot-clea
 ```
 
 * `audit-tree.py` removes personal data (Wi-Fi, keys, browser profiles, logs, call/SMS history, caches, the author's
-  account), leaves Chrome, Claude Desktop, Wine/Office and the Qualcomm GPU firmware out, and then **audits** the result.
+  account), leaves Chrome, other closed-source applications and the Qualcomm GPU firmware out, and then **audits** the result.
   A blocking finding stops the build.
 * The image carries a **locked placeholder account** (`s9user`). On the first boot a window asks for the user name, the
   password and the host name; `s9-firstboot-apply` renames the account everywhere it is referenced (the list is recorded

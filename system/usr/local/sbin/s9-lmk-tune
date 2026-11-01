@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Keeps the Android lowmemorykiller from killing the Wine tree (see s9-lmk-tune.sh for the reasoning).
+# Keeps the Android lowmemorykiller from killing large applications (see docs/memory-pressure.md for the reasoning).
 P=/sys/module/lowmemorykiller/parameters
 while :; do
   . /etc/s9-lmk.conf

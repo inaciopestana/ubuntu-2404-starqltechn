@@ -32,8 +32,4 @@ git checkout a22a0b358140
 for p in /path/to/kernel/patches/000*.patch; do git apply "$p" || break; done
 ```
 
-Other kernel bases for the same phone exist, for example Andrey0800770's
-[`samsung_sdm845-kernel` releases](https://github.com/Andrey0800770/samsung_sdm845-kernel/releases)
-(Linux 4.9.337, KernelSU + SUSFS). These patches have not been rebased onto them.
-
 The kernel is GPL-2.0 only; so are these patches.

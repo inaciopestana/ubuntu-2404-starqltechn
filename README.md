@@ -8,7 +8,7 @@ audio, mobile data, calls and SMS.
 > own SM-G9600 (G9600 = Snapdragon S9, China/Hong Kong variants). The flashable ZIP is built and was inspected on a PC,
 > but it has **not yet been flashed on a phone by anyone**, and nobody else has repeated any step. Flashing a kernel or boot
 > image can make a phone unbootable, and the ZIP **erases `userdata`** (Android's data). Back up EFS, modem and boot
-> partitions first and only continue if you accept that risk. See `docs/installing.md`.
+> partitions first and only continue if you accept that risk. See [`docs/installing.md`](docs/installing.md).
 
 ## Installation at a glance
 Five steps, in this order. Details, risks and the way back are in [`docs/installing.md`](docs/installing.md).
@@ -47,25 +47,27 @@ Five steps, in this order. Details, risks and the way back are in [`docs/install
   patched Mir/MirAL desktop, Xwayland, Freedreno/KGSL Mesa, the Halium 10 Android container, telephony and audio stack. The
   licences and the places to get the source of every part are in [`THIRD_PARTY.md`](THIRD_PARTY.md).
 * **Does not contain:** Samsung/Qualcomm firmware (the Adreno 630 firmware is copied at the first boot from your own phone's
-  `vendor` partition), Google Chrome (downloaded from Google at the first boot, so it needs Wi-Fi or mobile data), Wine,
-  box64, Windows/Office software, and any personal data of the author.
+  `vendor` partition), Google Chrome (downloaded from Google at the first boot, so it needs Wi-Fi or mobile data), and any
+  personal data of the author.
 * The ZIP is built by [`tools/image`](tools/image/README.md) from a backup of the author's phone, passes an automatic
   privacy audit and was inspected afterwards; it is a **pre-release**.
 
 ## What is in this repository
 | Path | Content |
 |---|---|
-| `docs/` | how the system works and how it was built (start at `docs/architecture.md`) |
-| `kernel/` | device config, kernel patches (incl. 3840x1080 DisplayPort support), build/flash scripts, Halium graft tooling |
-| `mir/` | patches on Mir 1.8.3 (cumulative) |
-| `platform/` | patch on the Mir Android/GPU platform |
-| `xwayland/` | Xwayland gralloc + DRI3 patches |
-| `shell/` | the custom MirAL shell (window manager) |
-| `system/`, `userland/` | systemd units, udev/sudoers rules, helper scripts and apps |
-| `installer/` | overlay installer and first-boot setup (tested on a scratch directory only) |
-| `tools/image/` | builds the flashable TWRP ZIP (boot + Ubuntu root image) from a backup of the phone, with a privacy audit; `flash-from-pc.sh` installs it over USB/adb |
-| `tools/twrp/` | patch and flash the TWRP that keeps its settings in `/cache` |
-| `tools/` | other maintainer tools: privacy scan, export scripts |
+| [`docs/`](docs/README.md) | how the system works and how it was built (start at [`architecture.md`](docs/architecture.md)) |
+| [`kernel/`](kernel/) | device config, [kernel patches](kernel/patches/README.md) (incl. 3840x1080 DisplayPort support), build/flash scripts, Halium graft tooling |
+| [`mir/`](mir/) | patches on Mir 1.8.3 (cumulative) |
+| [`platform/`](platform/) | patch on the Mir Android/GPU platform |
+| [`xwayland/`](xwayland/) | Xwayland gralloc + DRI3 patches |
+| [`shell/`](shell/) | the custom MirAL shell (window manager) |
+| [`system/`](system/), [`userland/`](userland/) | systemd units, udev/sudoers rules, helper scripts and apps |
+| [`installer/`](installer/) | overlay installer and first-boot setup (tested on a scratch directory only) |
+| [`tools/image/`](tools/image/README.md) | builds the flashable TWRP ZIP (boot + Ubuntu root image) from a backup of the phone, with a privacy audit; `flash-from-pc.sh` installs it over USB/adb |
+| [`tools/twrp/`](tools/twrp/README.md) | patch and flash the TWRP that keeps its settings in `/cache` |
+| [`tools/`](tools/) | other maintainer tools: privacy scan, export scripts |
+| [`THIRD_PARTY.md`](THIRD_PARTY.md), [`NOTICE.md`](NOTICE.md), [`LICENSE`](LICENSE) | what the release ZIP contains with licences and source locations; provenance of every directory; the licence text |
+| [`SECURITY.md`](SECURITY.md), [`CONTRIBUTING.md`](CONTRIBUTING.md) | reporting problems; how to contribute |
 
 ## What works (on the author's device)
 Desktop with window frames, dock, Alt+Tab, full-screen, clipboard (text/images) between Wayland native and
@@ -74,14 +76,13 @@ GL via native Freedreno on KGSL, audio, mobile data, voice calls and SMS (with a
 fan control, screen casting (browser/SRT/Cast/DLNA/Miracast), Chrome.
 
 ## What does not
-Hardware H.264 decoding (shows repeated frames). Windows applications (Wine) work on the author's phone but are not part
-of the release ZIP. Anything not listed above has not been tested.
+Hardware H.264 decoding (shows repeated frames). Anything not listed above has not been tested.
 
 ## Privacy
-No personal data, credentials or firmware are published. Run `tools/scan-privacy.sh` before every
+No personal data, credentials or firmware are published. Run [`tools/scan-privacy.sh`](tools/scan-privacy.sh) before every
 commit. The image carries a locked placeholder account; the first-boot window asks for your own user name, password and
 host name, so there are no default credentials.
 
 ## License
 GPL-3.0-or-later for original work; third-party patches keep their upstream licences. See
-`LICENSE` and `NOTICE.md`.
+[`LICENSE`](LICENSE), [`NOTICE.md`](NOTICE.md) and [`THIRD_PARTY.md`](THIRD_PARTY.md).

@@ -1,5 +1,5 @@
 [Unit]
-Description=Keep the Android lowmemorykiller from killing the Wine tree
+Description=Keep the Android lowmemorykiller from killing large applications
 
 [Service]
 Type=simple

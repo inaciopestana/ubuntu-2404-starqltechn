@@ -27,8 +27,7 @@ where the corresponding source code is. The original work of this repository is 
 * **Samsung and Qualcomm firmware and vendor files.** The Adreno 630 firmware (`a630_sqe.fw`, `a630_gmu.bin`) is copied at
   the first boot from your own phone's `vendor` partition. `system`, `vendor`, the modem and `efs` are never written.
 * **Google Chrome.** Downloaded at the first boot from Google's own `.deb` link once the phone has network.
-* **Wine, box64, hangover, Windows or Office software, Claude Desktop** and the author's personal files, accounts,
-  keys, Wi-Fi networks, browser profiles and logs.
+* **The author's personal files**, accounts, keys, Wi-Fi networks, browser profiles and logs.
 * **TWRP**, `multidisabler` and `forceencrypt_remover_q`: you download them from their authors (see the front page).
 
 ## Written offer for source code

@@ -68,9 +68,6 @@ cd android_kernel_samsung_sdm845
 for p in ../s9-ubports/kernel/patches/000*.patch; do git apply "$p" || break; done
 # defconfig: starqlte_chn_halium_defconfig + kernel/halium.config
 ```
-* Other kernel bases for this phone: Andrey0800770's [`samsung_sdm845-kernel` releases](https://github.com/Andrey0800770/samsung_sdm845-kernel/releases) (Linux 4.9.337,
-  KernelSU + SUSFS; [`starqltechn-v4.9.337-Rel11.zip`](https://github.com/Andrey0800770/samsung_sdm845-kernel/releases/download/V4.9.337-011-susfs4ksu/starqltechn-v4.9.337-Rel11.zip)). This repository's patches were made and tested on the
-  FakeShell tree only; they have not been rebased onto Andrey's.
 * Build with the **Android GCC 4.9** cross compiler (`aarch64-linux-android-`) **inside an
   Ubuntu 22.04 chroot** (`debootstrap jammy /opt/ubuntu2204`, enter with `systemd-nspawn`): the
   `make` of a very new distribution fails in `scripts/Makefile.lib`.

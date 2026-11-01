@@ -46,7 +46,7 @@ callback.
 
 ## 5. Crash: race between the decoration constructor and the executor (`S9_DECOR_CTOR_GUARD_V1`)
 * **Symptom:** intermittent `SIGSEGV`/`SIGABRT` of the compositor (heap corruption), more often
-  under heavy Wine use. Two cores showed the same program counter inside
+  under heavy load. Two cores showed the same program counter inside
   `Renderer::Text::Null` destruction.
 * **Cause:** `BasicDecoration`'s constructor does a full `update()` and, with the window-growth
   patch (`S9_DECOR_GROW_V1`), resizes the window. That triggers `window_state_updated()` /
