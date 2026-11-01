@@ -2,10 +2,10 @@
 
 > **Read this first.** This is a hobby port assembled by one person on one phone. The pieces
 > below are real and were used on that phone, but **nobody has repeated the whole procedure from
-> a blank phone**, and one piece (the boot-image ramdisk, see [Known gaps](#known-gaps)) is not in
-> this repository yet. Flashing a boot image can leave the phone unbootable; doing the wrong
-> thing to modem/EFS partitions can destroy IMEI and radio. Only continue if you can recover a
-> phone with Odin/stock firmware and you accept that risk.
+> a blank phone**: building a boot image from scratch and writing the root image to `userdata`
+> have not been tried (see [Known gaps](#known-gaps)). Flashing a boot image can leave the phone
+> unbootable; doing the wrong thing to modem/EFS partitions can destroy IMEI and radio. Only
+> continue if you can recover a phone with Odin/stock firmware and you accept that risk.
 
 ## 0. What you need
 * **Samsung Galaxy S9 SM-G9600** (Snapdragon 845). Not the Exynos models; not the S9+ (SM-G9650)
@@ -60,6 +60,20 @@ git apply ../s9-ubports/kernel/patches/s9-secdp-ultrawide-32-9.patch   # 3840x10
   `kernel/scripts/s9-kbuild5.sh` does this and verifies it (header identical except size and id,
   ramdisk byte-identical, kernel equals the build); it is written for the author's directory layout
   and in Portuguese, so read it and adapt it before running it.
+* **First install (no S9 boot image yet).** The author only ever repacked an *existing* boot
+  image; building one from scratch follows the same rules but has not been tried. Build the
+  [ramdisk](../kernel/ramdisk/README.md) first (it mounts the Ubuntu root, see step 5), then:
+  ```sh
+  kernel/ramdisk/build-ramdisk.py --rootfs /mnt/rootfs --out ramdisk.cpio.gz
+  python3 unpack_bootimg.py --boot_img backup-boot.img --out stock --format=mkbootimg
+  #   -> prints the mkbootimg arguments of your stock image. Reuse them, replacing
+  #      --kernel with Image.gz-dtb, --ramdisk with ramdisk.cpio.gz and
+  #      --cmdline with the deviceinfo_kernel_cmdline value from kernel/deviceinfo.
+  mkbootimg <those arguments> -o boot-new.img
+  ```
+  Then append `SEANDROIDENFORCE`, pad to 67108864 bytes, and compare the header of `boot-new.img`
+  with the stock one (`unpack_bootimg.py` on both): `second_addr`, `tags_addr`, offsets and page
+  size must match.
 * Optional 120 Hz mode: module parameter `s9_uw_hz` (default 60). 120 Hz needs a 4-lane DisplayPort
   link and gives a blank screen on 2-lane docks.
 
@@ -80,7 +94,7 @@ cd s9-ubports && sudo S9_WORK=$PWD/work kernel/scripts/build-rootfs-stage1.sh   
 Then, inside the arm64 root (chroot with `qemu-aarch64-static`):
 1. Add the **UBports 24.04-2.x** repository and install the Halium/Lomiri base: `libhybris`,
    `lomiri-system-compositor`, `mir` 1.8.3 packages, `ofono-sailfish` + binder plugin,
-   `pulseaudio-modules-droid`, `bluebinder`, `NetworkManager`, `xfce4` (minimal), `lightdm`
+   `pulseaudio-modules-droid`, `bluebinder`, `busybox-static` and `dmsetup` (for the ramdisk), `NetworkManager`, `xfce4` (minimal), `lightdm`
    (only for its seat handling), `xwayland`, `docklike` plugin. The complete list of packages on the
    author's phone is not published yet.
 2. Run the Halium graft helpers `kernel/halium-graft/00..08` (dry-run by default; `--apply` to
@@ -115,10 +129,21 @@ Then, inside the arm64 root (chroot with `qemu-aarch64-static`):
    | `/opt/s9-xwayland-gralloc/Xwayland.wrapper` | Xwayland with the gralloc backend (bind-mounted over `/usr/bin/Xwayland`) |
    | `/opt/mesa-kgsl-peekaboo/` | Mesa with Freedreno on KGSL (third-party package, not included) |
 
-6. Put the root file system on the phone. The kernel command line in `kernel/deviceinfo`
-   mounts the Ubuntu root from `root=/dev/sda29` (ext4) and the Android `system` image from the
-   partition labelled `system`; this is where the [known gap](#known-gaps) about the ramdisk
-   matters. Do not repartition unless you know exactly which partition holds your data.
+6. **Put the root file system on the phone.** The Ubuntu root lives inside the `userdata`
+   partition (`sda29`), 1 MiB from its start; the ramdisk maps it as `/dev/mapper/s9root`
+   ([kernel/ramdisk/README.md](../kernel/ramdisk/README.md)). This **destroys everything on `userdata`**
+   (back it up if you want to keep it). Build a small ext4 image and write it at the 1 MiB offset
+   from TWRP:
+   ```sh
+   # PC, as root: image of the finished root tree (overlay and account already installed)
+   truncate -s 6G rootfs.img && mkfs.ext4 -L s9root -d /mnt/rootfs rootfs.img
+   sha256sum rootfs.img
+   # TWRP, USB connected (not tested by the author, who created the image differently):
+   adb exec-in 'dd of=/dev/block/platform/soc/1d84000.ufshc/by-name/userdata bs=1M seek=1' < rootfs.img
+   adb exec-out 'dd if=/dev/block/platform/soc/1d84000.ufshc/by-name/userdata bs=1M skip=1 count=6144' | sha256sum
+   ```
+   The two hashes must be equal. After the first boot, grow the file system to the whole
+   mapping: `sudo resize2fs /dev/mapper/s9root`.
 
 ## 6. First boot
 Boot the phone. If the first-boot service was enabled and no `--conf` was given, it asks on
@@ -144,7 +169,7 @@ being worked on; patches welcome.
 
 | Gap | Detail |
 |---|---|
-| **Boot ramdisk** | The author's boot image uses a ramdisk modified so that the Ubuntu root (`/dev/mapper/s9root`, built on `sda29`) is mounted. Those changes come from the phone's own boot image (Halium initramfs) and are **not published** here. Until a ramdisk builder is added, use the Halium/UBports initramfs recipe for a device with the same `deviceinfo`. |
+| **Boot image from scratch** | The ramdisk (`kernel/ramdisk/`) is published and `build-ramdisk.py` works on stand-in binaries, but nobody has built a boot image from it or booted it; the author reused the ramdisk of an existing boot image. Writing the root image to `userdata` (step 5.6) is also untested as written. |
 | **Package list** | The exact list of installed packages and UBports repository pins is not yet exported. |
 | **Mesa KGSL package** | Comes from a third party (`ImPeekaboo`); you must obtain it yourself. |
 | **Image builder** | There is no script that produces a flashable root image; stage 5 is manual. |

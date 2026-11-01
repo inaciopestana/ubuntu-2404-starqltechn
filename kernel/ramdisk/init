@@ -1,10 +1,10 @@
 #!/bin/sh
 # S9 initramfs /init - mounts the Ubuntu root and hands over to it.
 #
-# DRAFT: generalized from the author's working script, which used a fixed length
-# (0 111619768 linear /dev/sda29 2048). The computed length below (partition size from sysfs
-# minus 2048 sectors at each end) is expected to give the same value but has NOT been verified
-# on a phone yet. Do not flash an image containing this file before checking it.
+# Generalized from the author's working script, which used a fixed length
+# (0 111619768 linear /dev/sda29 2048). On the author's phone the partition has 111623864
+# sectors, and 111623864 - 2048 - 2048 = 111619768, so the computed table is identical to the
+# working one there. This generalized file itself has not been booted yet.
 #
 # The Ubuntu root file system is an ext4 image stored INSIDE the phone's `userdata`
 # partition (/dev/sda29), starting 1 MiB from its beginning. This script exposes that area
