@@ -29,8 +29,8 @@ where the corresponding source code is. The original work of this repository is 
 * **Google Chrome.** Downloaded at the first boot from Google's own `.deb` link once the phone has network.
 * **The author's personal files**, accounts, keys, Wi-Fi networks, browser profiles and logs.
 * **`multidisabler` and `forceencrypt_remover_q`**: you download them from their authors (see the front page).
-* **TWRP**: the release also carries a copy of TeamWin's TWRP 3.7.0_9-0 for `starqltechn` with the one-line settings change
-  of [`tools/twrp/`](tools/twrp/README.md) (a separate file, not part of the Ubuntu ZIP). TWRP is GPL-3.0 and other free licences;
+* **TWRP**: the release also carries a copy of TeamWin's TWRP 3.7.0_9-0 for `starqltechn` (an Odin tar) with the one-line settings
+  change of [`tools/twrp/`](tools/twrp/README.md) (a separate file, not part of the Ubuntu ZIP). TWRP is GPL-3.0 and other free licences;
   source: <https://twrp.me/> and TeamWin's GitHub organisation. The unmodified original is at
   <https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html>.
 

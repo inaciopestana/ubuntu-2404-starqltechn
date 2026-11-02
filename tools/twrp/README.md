@@ -19,10 +19,12 @@ Nothing else in the recovery changes. Kernel, device tree and every other ramdis
 | `flash-recovery.sh` | Phone (root) | Backs up the current recovery partition (`sda21`), writes the patched image, reads it back and compares SHA-256. |
 
 No recovery image is stored in the repository tree. TWRP and `magiskboot` are third-party GPL projects; get them from their
-own releases. For convenience the result of this procedure (`twrp-3.7.0_9-0-starqltechn-settings-cache.img`, SHA-256
-`96063fe2ba5c8450dced1f0bbdce9fe0da11f5a7fa462f6acaf89c122f115df0`) is also attached to the
-[release](../../../../releases/tag/v0.1.0-pre1) as a binary: it is TeamWin's TWRP with one line changed in
-`etc/recovery.fstab` (see above); TWRP's source is available from <https://twrp.me/> and TeamWin's GitHub organisation.
+own releases. For convenience the result of this procedure is also attached to the
+[release](../../../../releases/tag/v0.1.0-pre1) as `twrp-3.7.0_9-0-starqltechn-settings-cache.tar` (SHA-256
+`b3d3061d30f253b78f9c146639e3c2cc937c40347e55451e4d5f3420f633e7e2`), an Odin "AP" tar holding a single file,
+`recovery.img` (72,339,456 bytes, SHA-256 `96063fe2ba5c8450dced1f0bbdce9fe0da11f5a7fa462f6acaf89c122f115df0`). It is
+TeamWin's TWRP with one line changed in `etc/recovery.fstab` (see above). To flash it from Linux or Windows use Odin in
+download mode (AP slot); to get the bare image, `tar -xf` it; TWRP's source is available from <https://twrp.me/> and TeamWin's GitHub organisation.
 
 ## Usage
 
