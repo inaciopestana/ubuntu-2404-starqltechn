@@ -13,6 +13,7 @@ Start with [`architecture.md`](architecture.md), then read the topic you need.
 | [`mir-bugs-and-fixes.md`](mir-bugs-and-fixes.md) | catalogue of Mir/Xwayland bugs found and how they were fixed |
 | [`tray-panel-and-accessories.md`](tray-panel-and-accessories.md) | tray panel, DeX fan, applets, housekeeping |
 | [`screen-cast.md`](screen-cast.md) | browser / SRT / Cast / DLNA / Miracast |
+| [`chrome.md`](chrome.md) | Chrome on X11 with native Freedreno today, and the old Wayland + EGL shim setup |
 | [`video-playback.md`](video-playback.md) | video decoding status |
 | [`memory-pressure.md`](memory-pressure.md) | the Android low-memory killer and how it is tamed |
 | [`kmshare.md`](kmshare.md) | sharing a PC keyboard/mouse |

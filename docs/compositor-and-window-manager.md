@@ -59,8 +59,9 @@ Every change followed the same pattern, which is worth keeping if you extend the
   disappears while its Mir surface is still being configured.
 
 ## Gotchas
-* Restart the Docklike helper **and** MirAL together; restarting only the helper breaks the
-  Chrome bridge (every click opens a new instance).
+* Restart the Docklike helper **and** MirAL together. This only matters if the old Wayland Chrome bridge is switched on
+  (see [`chrome.md`](chrome.md); it is off by default): restarting only the helper then breaks it, and every click on the dock
+  opens a new Chrome instance.
 * `grep -a` is needed on the compositor log (it contains binary bytes).
 * Do not edit a library or binary that a running service has mapped; deploy next to it and
   switch through the drop-in.

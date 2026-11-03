@@ -66,11 +66,9 @@ Practical numbers on the real desktop: `glxgears` (vsync off) 1452 fps on native
   Xwayland from starting.
 
 ## Browser
-Chrome runs ANGLE-GLES on the Adreno through libhybris with a small EGL shim; its
-compositing stays in software (`disabled_software`) because Chromium's Ozone/Wayland needs
-GBM+dmabuf. It still reaches 60 fps on ordinary pages. In-process GPU, extra sandbox flags,
-GPU rasterisation toggles and the performance governor gave no benefit. A true fix would be
-a Chromium presentation backend based on gralloc + `android_wlegl` (hours of build time).
+Chrome runs as a normal X11 program on the native Freedreno path above (compositing and WebGL on the GPU); the old Wayland
++ EGL-shim setup, which kept compositing in software, is history. Details, numbers and how to go back:
+[`chrome.md`](chrome.md).
 
 ## Open items
 * Fences instead of `glFinish`; unexplained slowdown of some 2D operations (copy/scroll) vs

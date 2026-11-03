@@ -17,7 +17,8 @@ Android service; lowering both falls back to `v4l2h264dec`, which fails on this 
 (`msm_vidc ... reqbufs -22`). Hence the whole list.
 
 ## Chrome
-Chrome 155 uses the Adreno through ANGLE-GLES via libhybris but composites in software and has
-no hardware video decoder; 1080p H.264 costs ~2 cores, 4K VP9 ~4.6. The `h264-all` extension
+Chrome 155 runs on X11 with native Freedreno (hardware compositing, see [`chrome.md`](chrome.md)) but has no hardware video
+decoder (the list of accelerated profiles is empty); 1080p H.264 costs about 2 cores, 4K VP9 about 4.6 (measured on the earlier
+Wayland setup; not measured again on X11). The `h264-all` extension
 idea (hide VP8/VP9/AV1 from `MediaSource.isTypeSupported`) helps on sites that otherwise pick
 VP9. VLC 3.0.20 has no GStreamer module on Ubuntu 24.04 and cannot use MediaCodec.
