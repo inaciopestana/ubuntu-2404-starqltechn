@@ -73,7 +73,8 @@ else
 fi
 ui_print "boot: $BOOT_BLOCK   userdata: $DATA_BLOCK"
 [ "$BOOT_PART_SIZE" -ge "$BOOT_SIZE" ] || abort_install "boot partition is smaller than the boot image."
-[ "$DATA_PART_SIZE" -ge $((RAW_SIZE + 2 * MIB)) ] || abort_install "userdata is too small for the root image."
+# busybox [ compares integers with 32 bits (userdata is ~57 GB): do the 64-bit comparison inside $(( ))
+[ "$((DATA_PART_SIZE >= RAW_SIZE + 2 * MIB))" = 1 ] || abort_install "userdata is too small for the root image."
 set_progress 0.02
 
 if [ "${S9_TEST:-}" != 1 ]; then
@@ -112,8 +113,10 @@ fi
 TMPDIR=/tmp/s9-install
 rm -rf "$TMPDIR"; mkdir -p "$TMPDIR" || abort_install "cannot create $TMPDIR."
 
-ui_print "Testing the ZIP (CRC)..."
-unzip -tq "$ZIPFILE" >/dev/null 2>&1 || abort_install "the ZIP is corrupt or incomplete (copy it again)."
+ui_print "Checking the ZIP..."
+# the busybox unzip of TWRP has no -t: check that the ZIP directory can be read. The payload itself is verified below
+# (boot.img SHA-256, xz integrity of the whole root image, SHA-256 read-back of userdata).
+unzip -l "$ZIPFILE" >/dev/null 2>&1 || abort_install "the ZIP is corrupt or incomplete (copy it again)."
 set_progress 0.06
 
 ui_print "Checking boot.img..."
