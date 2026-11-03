@@ -1,0 +1,362 @@
+#!/sbin/sh
+#
+# S9 (SM-G9600 / Snapdragon) combined flashable: services disabler + /data
+# encryption removal, in ONE zip, in the right order.
+#
+# Part 1: Multi-disabler v2.3 by Ian Macdonald (vaultkeeperd, proca, wsm,
+#         restoration of the stock recovery, ...), with small changes: it
+#         finds the system partition at /system_root or /system, reads the
+#         Android version from the installed firmware, and keeps a log.
+# Part 2: forceencrypt_remover_Q-mod by @klabit87: replaces
+#         /vendor/etc/fstab.qcom with a version without encryption flags.
+#         Embedded below (function write_s9_fstab); same content as the
+#         original zip. The original file is saved once as fstab.qcom.orig.
+#
+# Use this right after installing TWRP, BEFORE booting Android.
+# Afterwards /data must be formatted (Wipe > Format Data > yes) or be
+# overwritten by the S9 Ubuntu installer.
+
+ZIPFILE=$3
+ZIPNAME=${ZIPFILE##*/}
+OUTFD=$2
+
+scr_wdth=50
+FSTAB=/vendor/etc/fstab.qcom
+# Everything printed is also kept in a log (copied to /cache on exit, so it
+# survives a reboot of the recovery): /cache/s9-disabler.log
+LOG=/tmp/s9-disabler.log
+: > $LOG
+trap 'cp $LOG /cache/s9-disabler.log 2>/dev/null' EXIT
+
+# Detect real $OUTFD
+#
+if readlink /proc/$$/fd/$OUTFD 2>/dev/null | grep /tmp >/dev/null; then
+  OUTFD=0
+  for FD in $( ls /proc/$$/fd ); do
+    if readlink /proc/$$/fd/$FD 2>/dev/null | grep pipe >/dev/null; then
+      if ps | grep " 3 $FD " | grep -v grep >/dev/null; then
+	OUTFD=$FD
+	break
+      fi
+    fi
+  done
+fi
+
+ui_print() {
+  echo "$1" >> $LOG
+  echo -ne "ui_print $1\n" >> /proc/self/fd/$OUTFD
+  echo -ne "ui_print\n" >> /proc/self/fd/$OUTFD
+}
+
+print_full_bar() {
+  ui_print "$(printf '%*s\n' $scr_wdth | tr ' ' '=')"
+}
+
+print_justified() {
+  local str="$1"
+  local str_len=${#str}
+  local padding_len=$(( ($scr_wdth - $str_len - 2) / 2))
+  local ljust="$(printf '%*s' $padding_len)"
+  local rjust="$(printf '%*s' $(($padding_len + $str_len % 2)))"
+
+  ui_print "=$ljust$str$rjust="
+}
+
+rm_from_manifest() {
+  local service=$1
+
+  # Package path is different on Android 10. Check and adapt.
+  #
+  local path_extra='\.hardware'
+
+  sed -i -e '/<hal format="hidl">/{N;/<name>vendor\.samsung'"$path_extra"'\.security\.'"$service"'<\/name>/{:loop;N;/<\/hal>/!bloop;d}}' /vendor/etc/vintf/manifest.xml $ANDROID_ROOT/system/etc/vintf/compatibility_matrix.device.xml
+}
+
+write_s9_fstab() {
+cat <<'S9_FSTAB_EOF'
+# Android fstab file.
+# The filesystem that contains the filesystem checker binary (typically /system) cannot
+# specify MF_CHECK, and must come before any filesystems that do specify MF_CHECK
+
+#TODO: Add 'check' as fs_mgr_flags with data partition.
+# Currently we dont have e2fsck compiled. So fs check would failed.
+
+#<src>                                                 <mnt_point>         <type>  <mnt_flags and options>                             <fs_mgr_flags>
+/dev/block/bootdevice/by-name/system                    /system             ext4    ro,errors=panic                                      wait
+/dev/block/bootdevice/by-name/userdata	/data	ext4	noatime,nosuid,nodev,noauto_da_alloc,discard,journal_checksum,data=ordered,errors=panic	wait,check,quota,reservedsize=128M
+#/dev/block/bootdevice/by-name/vendor                    /vendor             ext4    ro,barrier=1,discard                                 wait
+/dev/block/bootdevice/by-name/persist	/mnt/vendor/persist	ext4	noatime,nosuid,nodev,noauto_da_alloc,discard,journal_checksum,data=ordered,errors=panic	wait,check
+/dev/block/bootdevice/by-name/cache	/cache	ext4	noatime,nosuid,nodev,noauto_da_alloc,discard,journal_checksum,data=ordered,errors=panic	wait,check
+/dev/block/bootdevice/by-name/apnhlos                   /vendor/firmware_mnt   vfat    ro,context=u:object_r:firmware_file:s0,shortname=lower,uid=0,gid=1000,dmask=227,fmask=337 wait
+/dev/block/bootdevice/by-name/modem                     /vendor/firmware-modem vfat    ro,context=u:object_r:firmware_file:s0,shortname=lower,uid=0,gid=1000,dmask=227,fmask=337 wait
+/dev/block/bootdevice/by-name/dsp                       /vendor/dsp            ext4    ro,nosuid,nodev,barrier=1                            wait
+/dev/block/bootdevice/by-name/efs	/mnt/vendor/efs	ext4	noatime,nosuid,nodev,noauto_da_alloc,discard,journal_checksum,data=ordered,errors=panic	wait,check
+/dev/block/bootdevice/by-name/dqmdbg	/mnt/vendor/dqmdbg	ext4	noatime,nosuid,nodev,noauto_da_alloc,discard,journal_checksum,data=ordered,errors=panic	wait,check
+/dev/block/bootdevice/by-name/carrier	/carrier	ext4	noatime,nosuid,nodev,noauto_da_alloc,discard,journal_checksum,data=ordered,errors=panic	defaults,nofail,check
+
+#
+# Need to have this entry in here even though the mount point itself is no longer needed.
+# The update_engine code looks for this entry in order to determine the boot device address
+# and fails if it does not find it.
+/dev/block/bootdevice/by-name/misc                      /misc               emmc    defaults                                             defaults
+# /dev/block/bootdevice/by-name/nad_refer                 /nad_refer          ext4    noatime,nosuid,nodev,noauto_da_alloc,discard,journal_checksum,data=ordered,errors=panic                        wait,check,formattable,factoryuse
+
+# VOLD :: fstab.qcom
+/dev/block/bootdevice/by-name/hidden	/preload	ext4	noatime,nosuid,nodev,noauto_da_alloc,discard,journal_checksum,data=ordered,errors=panic	voldmanaged=preload:auto,check
+/devices/platform/soc/8804000.sdhci/mmc_host/mmc*       auto                vfat    defaults    voldmanaged=sdcard:auto
+/devices/platform/soc/a600000.ssusb/a600000.dwc3/xhci-hcd.0.auto/usb* auto  auto    defaults    voldmanaged=usb:auto
+
+# TODO: Needs to be checked by memory part
+# /dev/block/zram0                                        none               swap    defaults                                             zramsize=1073741824
+S9_FSTAB_EOF
+}
+
+disable_fbe() {
+  ui_print " - Removing /data encryption (replacing $FSTAB)..."
+
+  if [ ! -f $FSTAB ]; then
+    ui_print " - $FSTAB not found."
+    return 1
+  fi
+
+  write_s9_fstab > /tmp/fstab.qcom.new
+  if [ ! -s /tmp/fstab.qcom.new ] \
+     || ! grep -q 'by-name/userdata' /tmp/fstab.qcom.new \
+     || grep -qE 'forceencrypt|fileencryption' /tmp/fstab.qcom.new; then
+    ui_print " - Embedded fstab failed its self-check."
+    rm -f /tmp/fstab.qcom.new
+    return 1
+  fi
+
+  if cmp -s /tmp/fstab.qcom.new $FSTAB; then
+    ui_print " - fstab.qcom already replaced. Nothing to do."
+    rm -f /tmp/fstab.qcom.new
+    return 0
+  fi
+
+  # Keep the very first original, so it can be restored.
+  if [ ! -f $FSTAB.orig ]; then
+    cp -p $FSTAB $FSTAB.orig 2>/dev/null \
+      && ui_print " - Original saved as $FSTAB.orig" \
+      || ui_print " - Could not save $FSTAB.orig; continuing."
+  fi
+
+  # Write in place (keeps owner, mode and SELinux label of the file).
+  cat /tmp/fstab.qcom.new > $FSTAB
+  if cmp -s /tmp/fstab.qcom.new $FSTAB; then
+    ui_print " - fstab.qcom replaced and verified."
+    rm -f /tmp/fstab.qcom.new
+    return 0
+  fi
+
+  ui_print " - Could not write $FSTAB."
+  [ -f $FSTAB.orig ] && cat $FSTAB.orig > $FSTAB
+  rm -f /tmp/fstab.qcom.new
+  return 1
+}
+
+disable_vaultkeeper() {
+  ui_print " - Disabling vaultkeeperd..."
+
+    # This is Android 10: Vaultkeeper has its own init files.
+    #
+    for i in $ANDROID_ROOT/system/etc/init/vk*.rc /vendor/etc/init/vk*.rc; do
+      [ -f $i ] && sed -i -e 's/^[^#].*$/# &/' $i
+    done
+
+  # Qualcomm devices such as the T860 and T865 need this, otherwise the log
+  # will be spammed with messages about failed connections to the Vaultkeeper
+  # service.
+  #
+  rm_from_manifest vaultkeeper
+
+  # Option 1: Unknown whether it even works.
+  # sed -i -e 's/\(ro\.security\.vaultkeeper\.native=\)1/\10/' /vendor/build.prop
+  #
+  # Option 2: This works and apparently won't spam logcat, but is drastic.
+  # rm $ANDROID_ROOT/system/bin/vaultkeeperd
+  #
+  # Option 3: This works and is and is the least invasive choice.
+  for i in $ANDROID_ROOT/system /vendor; do
+    [ -f $i/bin/vaultkeeperd ] && chmod 0 $i/bin/vaultkeeperd
+  done
+}
+
+disable_cass() {
+  # The T860 needs this. Otherwise, the log will fill with messages like this:
+  #
+  # 10-20 03:23:20.501 27757 27757 E CASS: Failed to connect(4)
+  # 10-20 03:23:20.501 27757 27757 E CASS: Failed to connect ril daemon(2). Retry cnt(6)
+  #
+  # The F907B on Android 10 also needs it:
+  #
+  # 04-05 22:21:23.519  3599  3599 E CASS_DEBUG: VaultKeeper is not ready. try again.
+  # 04-05 22:21:23.519  3599  3599 I CASS_DEBUG: Disconnect ril daemon
+  # 04-05 22:21:23.519  3599  3599 I CASS_DEBUG: Failed to connect ril daemon(1). Retry cnt(2)
+  #
+  ui_print " - Disabling cass..."
+
+  sed -i -e 's/^[^#].*cass.*$/# &/' -re '/\/(system|vendor)\/bin\/cass/,/^#?$/s/^[^#]*$/#&/' $ANDROID_ROOT/init.rc
+}
+
+disable_proca() {
+  ui_print " - Disabling process authentication..."
+
+  # G97[035]F = pa_daemon.rc on Android 9; pa_daemon_teegris.rc on Android 10.
+  # G977B, N97[05]F, A105F, A505F = pa_daemon_teegris.rc
+  # T510 + T515 = pa_daemon_kinibi.rc
+  # T860 + T865 = pa_daemon_qsee.rc
+  #
+  sed -i -e 's/^[^#]/# &/' /vendor/etc/init/pa_daemon*.rc
+
+  # Option 1: Works only if operable XML stanza is not the last in file.
+  #sed -i -e '/<name>vendor\.samsung\.security\.proca<\/name>/,/<hal format="hidl">/d' /vendor/etc/vintf/manifest.xml
+  #
+  # Option 2: This is safer, but more complex.
+
+  # Package path is different on Android 10. Check and adapt.
+  #
+  rm_from_manifest proca
+}
+
+disable_wsm() {
+  ui_print " - Disabling wsm..."
+  rm_from_manifest wsm
+}
+
+disable_recovery_restoration() {
+  ui_print " - Disabling restoration of stock recovery..."
+
+  mv $ANDROID_ROOT/system/recovery-from-boot.p $ANDROID_ROOT/system/recovery-from-boot.p~
+}
+
+patch_libbluetooth() {
+
+  local f=$ANDROID_ROOT/system/lib64/libbluetooth.so
+  local tf=/tmp/f
+
+  ui_print " - Bluetooth fix requested via renamed zip."
+  ui_print " - Attempting to patch $f..."
+
+  if echo $device | grep -E 'G96[50][00]|N9600' >/dev/null; then
+    # Snapdragon based devices, such as Tab S6, Fold (5G) and Chinese S9/10/N9/10.
+    substitute='s/88000054691180522925c81a69000037e0030032/04000014691180522925c81a69000037e0031f2a/'
+  else
+    substitute='s/c8000034f4031f2af3031f2ae8030032/1f2003d5f4031f2af3031f2ae8031f2a/'
+  fi
+
+  xxd -p $f | tr -d '\n ' | sed -e $substitute | xxd -rp > $tf
+
+  if ! cmp $tf $f >/dev/null && [ $(stat -c '%s' $tf) -eq $(stat -c '%s' $f) ]; then
+    ui_print " - Patching succeeded."
+    touch -r $f $tf
+    mv $tf $f
+  else
+    ui_print " - Patching failed. No change made."
+    rm -f $tf
+  fi
+}
+
+ui_print " "
+print_full_bar
+print_justified "S9 G9600 disabler + encryption removal"
+print_justified "Multi-disabler v2.3 (Ian Macdonald)"
+print_justified "forceencrypt_remover_Q-mod (klabit87)"
+print_full_bar
+ui_print " "
+
+os=$(getprop ro.build.version.release)
+major=${os%%.*}
+bl=$(getprop ro.boot.bootloader)
+
+# Firmware version starts at either 8th or 9th character, depending on length
+# of bootloader string (12 or 13).
+#
+fw=${bl:$((${#bl} - 4)):4}
+
+# Device is first 5 characters of bootloader string.
+#
+device=${bl:0:$((${#bl} - 8))}
+
+if echo $device | grep -Ev 'G96[50][00]|N9600' >/dev/null; then
+  ui_print " - Unsupported device detected ('$bl'). Installation aborted."
+  ui_print " "
+  exit 1
+fi
+ui_print " - Detected a $device device on $fw firmware."
+
+ui_print " - ANDROID_ROOT='$ANDROID_ROOT'"
+ui_print " - Mounting /vendor..."
+mount /vendor 2>/dev/null
+
+if [ ! -d /vendor/etc ]; then
+  ui_print " - /vendor could not be mounted. Aborted."
+  ui_print " "
+  exit 1
+fi
+
+# The system partition is mounted at /system_root on system-as-root TWRP
+# builds and at /system on others (and $ANDROID_ROOT may be either, or unset
+# when the zip is run from a shell). Try them all; the layout we need is
+# <root>/system/etc (system-as-root).
+ui_print " - Mounting system..."
+SYSROOT=
+for c in $ANDROID_ROOT /system_root /system; do
+  [ -n "$c" ] || continue
+  mount $c 2>/dev/null
+  if [ -d $c/system/etc ]; then
+    SYSROOT=$c
+    break
+  fi
+done
+
+if [ -n "$SYSROOT" ]; then
+  ui_print " - System found at $SYSROOT."
+  ANDROID_ROOT=$SYSROOT
+else
+  ui_print " - WARNING: system partition not found."
+  ui_print "   Skipping the system-side steps; /vendor is still handled."
+  ANDROID_ROOT=/nonexistent-s9
+fi
+
+# Android version of the installed firmware.
+if [ -n "$SYSROOT" ]; then
+  fwos=$(grep -m1 '^ro.build.version.release=' $SYSROOT/system/build.prop 2>/dev/null | cut -d= -f2)
+  if [ -n "$fwos" ]; then
+    ui_print " - Firmware Android version: $fwos (recovery reports: $os)"
+    os=$fwos
+    major=${os%%.*}
+  fi
+fi
+
+# Step 1 (most important): the fstab. If it fails, nothing else is touched.
+if ! disable_fbe; then
+  ui_print " - Encryption removal FAILED. Nothing else was changed."
+  umount /vendor 2>/dev/null
+  [ -n "$SYSROOT" ] && umount $SYSROOT 2>/dev/null
+  ui_print " "
+  exit 1
+fi
+
+# Step 2: the rest of the Multi-disabler.
+disable_vaultkeeper
+disable_proca
+disable_recovery_restoration
+[ $major -eq 10 ] && disable_wsm
+echo $device | grep -E 'T860|F90(0[FN]|7[BN])' >/dev/null && disable_cass
+[ $ZIPNAME != ${ZIPNAME/_btfix//} ] && [ $major -eq 10 ] && patch_libbluetooth
+
+ui_print " - Unmounting /vendor..."
+umount /vendor
+ui_print " - Unmounting $ANDROID_ROOT..."
+umount $ANDROID_ROOT
+
+ui_print " "
+ui_print " - Finished."
+ui_print " "
+ui_print " Next step: /data is still encrypted until it is"
+ui_print " formatted. Either Wipe > Format Data > type yes"
+ui_print " (erases internal storage), or flash the S9 Ubuntu"
+ui_print " zip, which overwrites userdata."
+ui_print " Do NOT boot Android before that."
+ui_print " "
