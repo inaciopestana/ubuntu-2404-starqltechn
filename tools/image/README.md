@@ -1,6 +1,6 @@
 # Building the flashable ZIP
 
-`build-image.sh` turns a backup of a working phone (made with `tools/backup-phone.sh`) into a ZIP that TWRP installs:
+`build-image.sh` turns a backup of a working phone (the backup script is not in this repository yet; the layout it must produce is described in the header of `build-image.sh`) into a ZIP that TWRP installs:
 the boot image plus the Ubuntu root image written into `userdata`. Run it as root on a Linux PC.
 
 ## Release build (what users get)
@@ -22,6 +22,11 @@ tools/image/build-release.sh --backup ~/s9-backups/<backup> --boot <boot-clean.i
 
 It never uploads anything.
 
+* **The ZIP is built from the phone backup, not from this repository.** A change committed here (an icon, a script) is in the
+  ZIP only if the backup already has it. `repo-sync.list` closes that gap: the files named in it are copied from the
+  repository over the extracted tree before the scrub and the audit, so a fix can ship without a new backup (and the log shows
+  `installed <path>` for each). Remove an entry once the backup you build from has the same file. `tests/test-repo-sync.sh`
+  checks that the listed files exist and that they replace the backup's copy with the right owner and mode.
 * `audit-tree.py` removes personal data (Wi-Fi, keys, browser profiles, logs, call/SMS history, caches, the author's
   account), leaves Chrome, other closed-source applications and the Qualcomm GPU firmware out, and then **audits** the result.
   A blocking finding stops the build.

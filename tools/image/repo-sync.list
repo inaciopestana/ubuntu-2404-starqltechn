@@ -1,0 +1,21 @@
+# Files of this repository that build-image.sh (clean mode) copies over the tree taken from the phone backup,
+# before the scrub and the audit. One path per line, relative to the repository root; the first directory
+# (userland/ or system/) is dropped to get the path in the image: userland/usr/local/bin/x -> /usr/local/bin/x.
+#
+# Why: the ZIP is built from a BACKUP of the author's phone, so a change committed here (an icon, a script) is not in
+# the ZIP until the phone has it too. List a changed file here and the next build carries it, without taking a new backup
+# (a new backup of a phone that runs the clean image would be an already scrubbed tree: do not do that).
+# Keep the list short and remove an entry once the backup you build from contains the same file.
+#
+# Modes are set by the scrub (usr/local/bin/ and sbin/ 0755, everything else 0644), owner root.
+#
+# 3 Nov 2026: dex-fan tray icon with the level word (OFF/LOW/MED/HIGH/AUTO)
+userland/usr/local/bin/s9-dex-fan-tray
+userland/usr/local/share/s9-dex-fan/icons/s9-dex-fan-high-auto.svg
+userland/usr/local/share/s9-dex-fan/icons/s9-dex-fan-high.svg
+userland/usr/local/share/s9-dex-fan/icons/s9-dex-fan-low-auto.svg
+userland/usr/local/share/s9-dex-fan/icons/s9-dex-fan-low.svg
+userland/usr/local/share/s9-dex-fan/icons/s9-dex-fan-medium-auto.svg
+userland/usr/local/share/s9-dex-fan/icons/s9-dex-fan-medium.svg
+userland/usr/local/share/s9-dex-fan/icons/s9-dex-fan-off-auto.svg
+userland/usr/local/share/s9-dex-fan/icons/s9-dex-fan-off.svg

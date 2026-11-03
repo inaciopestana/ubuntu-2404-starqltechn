@@ -124,7 +124,20 @@ if [ "$MODE" = clean ]; then
   OLDUSER=$(awk -F: '$3==1000{print $1; exit}' "$TREE/etc/passwd")
   [ -n "$OLDUSER" ] || die "no account with uid 1000 in the tree"
   OLDHOST=$(head -n1 "$TREE/etc/hostname" 2>/dev/null | tr -d '[:space:]')
-  OVERLAYS=(--overlay "$HERE/clean-overlay") FB_SCRUB=() FB_AUDIT=()
+  # files of this repository that are newer than the phone backup (repo-sync.list): staged as an overlay of their own,
+  # applied first so that clean-overlay/ can still override them
+  SYNC_LIST=$HERE/repo-sync.list; REPO_ROOT=$(cd "$HERE/../.." && pwd); SYNC_DIR=$WORK/repo-overlay; NSYNC=0
+  rm -rf "$SYNC_DIR"; mkdir -p "$SYNC_DIR"
+  if [ -f "$SYNC_LIST" ]; then
+    while IFS= read -r SP || [ -n "$SP" ]; do
+      case $SP in ''|'#'*) continue;; esac
+      case $SP in userland/*) SREL=${SP#userland/};; system/*) SREL=${SP#system/};; *) die "repo-sync.list: $SP must start with userland/ or system/";; esac
+      [ -f "$REPO_ROOT/$SP" ] || die "repo-sync.list: $SP not found in the repository"
+      install -D -m 644 "$REPO_ROOT/$SP" "$SYNC_DIR/$SREL"; NSYNC=$((NSYNC + 1))
+    done < "$SYNC_LIST"
+  fi
+  info "$NSYNC file(s) of the repository copied over the backup (tools/image/repo-sync.list)"
+  OVERLAYS=(--overlay "$SYNC_DIR" --overlay "$HERE/clean-overlay") FB_SCRUB=() FB_AUDIT=()
   if [ "$FIRSTBOOT" = 1 ]; then
     say "1c/5 account: a locked placeholder; the user's name, password and host name are asked on the first boot"
     OVERLAYS+=(--overlay "$HERE/clean-overlay-firstboot"); FB_SCRUB=(--defer-account); FB_AUDIT=(--first-boot-account)
