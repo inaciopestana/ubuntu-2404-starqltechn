@@ -98,14 +98,15 @@ it for one phone and documents how. Licences and the exact source of every part:
 **Graphics**
 * [ImPeekaboo](https://github.com/ImPeekaboo/mesa-a630-kgsl): the Mesa build with Freedreno on KGSL that gives the Adreno 630 its OpenGL.
 * [lfdevs](https://github.com/lfdevs): the Xwayland patch series for Android containers and the Mesa builds for Android containers ([`mesa-for-android-container`](https://github.com/lfdevs/mesa-for-android-container)).
-* [Mesa](https://www.mesa3d.org/) and [X.Org](https://www.x.org/) (Xwayland).
+* [X.Org](https://www.x.org/): Xwayland 24.1.6, the X server every X11 program here runs on (Chrome, Thunar, Wine, the XFCE panel). The patches that let it draw into Android graphics buffers and give clients DRI3 are applied on top of the X.Org source, and they only work because of its glamor and DRI3 code ([`docs/gpu-and-display-path.md`](docs/gpu-and-display-path.md)).
+* [Mesa](https://www.mesa3d.org/): Freedreno (the OpenGL driver for the Adreno 630, talking to the phone's KGSL driver), Turnip (Vulkan), Zink and llvmpipe, which the GPU path and the fallbacks are made of.
 
 **Telephony, audio and Bluetooth**
 * [Mer / Sailfish OS](https://github.com/mer-hybris) hybris projects ([`libgbinder`](https://github.com/mer-hybris/libgbinder), [`bluebinder`](https://github.com/mer-hybris/bluebinder), [`pulseaudio-modules-droid`](https://github.com/mer-hybris/pulseaudio-modules-droid)) and the Sailfish OS fork of [ofono](https://git.kernel.org/pub/scm/network/ofono/ofono.git) (`ofono-sailfish`), packaged by UBports.
 * [libhybris](https://github.com/libhybris/libhybris).
 
 **Desktop**
-* [Ubuntu](https://ubuntu.com/) and [Xfce](https://www.xfce.org/); the [docklike plugin](https://gitlab.xfce.org/panel-plugins/xfce4-docklike-plugin) by David Keogh (via the [xubuntu-dev/extras PPA](https://launchpad.net/~xubuntu-dev/+archive/ubuntu/extras)).
+* [Ubuntu](https://ubuntu.com/) 24.04 and [Xfce](https://www.xfce.org/) 4.18: the session, the panel, Thunar and the notification daemon (`xfce4-notifyd`) the desktop is made of; the [docklike plugin](https://gitlab.xfce.org/panel-plugins/xfce4-docklike-plugin) by David Keogh (via the [xubuntu-dev/extras PPA](https://launchpad.net/~xubuntu-dev/+archive/ubuntu/extras)).
 
 **Installing and flashing**
 * [TeamWin](https://twrp.me/): TWRP, the recovery everything is installed from ([`twrp-3.7.0_9-0-starqltechn`](https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html)).
