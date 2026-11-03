@@ -47,7 +47,7 @@ options. Without it Odin stops at `recovery.img` with `FAIL! (Auth)`. Details, a
 3. **Flash it:**
    * Linux, command line: `odin4 -a twrp-settings-cache.tar` (it ends with `Close Connection`; `odin4` does not restart the phone).
      If it times out in `Setup Connection`, connect the phone through a USB 2.0 hub.
-   * Linux, [Odin4 GUI](../../docs/returning-to-android.md#odin4-gui): put the tar in the *AP* slot (the GUI was not used for this by the author).
+   * Linux, [Odin4 GUI](../../docs/returning-to-android.md#odin4-gui) ([Ragekill3377/Odin4-GUI](https://github.com/Ragekill3377/Odin4-GUI)): put the tar in the *AP* slot (the GUI was not used for this by the author).
    * Windows, Odin: the tar in the *AP* slot, *Auto Reboot* off, Start (not tested by the author).
 4. **Boot straight into the recovery.** Do not let Android start first: Samsung's firmware has a `flash_recovery` service that can
    restore the stock recovery on a normal boot (on the author's phone it should find nothing to restore, because there is no

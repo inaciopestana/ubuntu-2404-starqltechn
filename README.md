@@ -4,11 +4,17 @@ A community experiment that runs a **full Ubuntu 24.04 desktop** (XFCE) on a Sna
 Galaxy S9 using Halium 10, with GPU acceleration (Adreno 630), external display support,
 audio, mobile data, calls and SMS.
 
+**The idea: the Galaxy S9 as a portable PC.** The system was designed to run with the phone plugged into a monitor
+(through a DeX-style dock) and used with a **mouse and a keyboard**. The touch screen works, but it is not what the
+desktop was made for, and **there is no on-screen (virtual) keyboard** in this project: without a physical keyboard you
+cannot type.
+
 > **Status: experimental, one device, one tester.** Everything here comes from the author's
-> own SM-G9600 (G9600 = Snapdragon S9, China/Hong Kong variants). The flashable ZIP was installed and booted on that phone
-> (by `adb sideload` from TWRP), but nobody else has repeated any step, and the author's own run from a stock phone is not finished. Flashing a kernel or boot
-> image can make a phone unbootable, and the ZIP **erases `userdata`** (Android's data). Back up EFS, modem and boot
-> partitions first and only continue if you accept that risk. See [`docs/installing.md`](docs/installing.md).
+> own SM-G9600 (G9600 = Snapdragon S9, China/Hong Kong variants). The author went from this port back to stock Android and
+> installed it again twice; the second time with nothing but the files of the [Releases](../../releases) page, and it worked
+> with no problem, so the installation path below is known to work on that phone. Nobody else has repeated it yet.
+> Flashing a kernel or boot image can make a phone unbootable, and the ZIP **erases `userdata`** (Android's data). Back up
+> EFS, modem and boot partitions first and only continue if you accept that risk. See [`docs/installing.md`](docs/installing.md).
 
 ## Installation at a glance
 Everything you need is on the [Releases](../../releases) page. Full steps, risks and the way back: [`docs/installing.md`](docs/installing.md).
@@ -66,7 +72,8 @@ GL via native Freedreno on KGSL, audio, mobile data, voice calls and SMS (with a
 fan control, screen casting (browser/SRT/Cast/DLNA/Miracast), Chrome.
 
 ## What does not
-Hardware H.264 decoding (shows repeated frames). Anything not listed above has not been tested.
+Hardware H.264 decoding (shows repeated frames). There is no on-screen keyboard (see the top of this page). Anything not
+listed above has not been tested.
 
 ## Privacy
 No personal data, credentials or firmware are published. Run [`tools/scan-privacy.sh`](tools/scan-privacy.sh) before every
@@ -76,3 +83,35 @@ host name, so there are no default credentials.
 ## License
 GPL-3.0-or-later for original work; third-party patches keep their upstream licences. See
 [`LICENSE`](LICENSE), [`NOTICE.md`](NOTICE.md) and [`THIRD_PARTY.md`](THIRD_PARTY.md).
+
+## Credits and thanks
+None of this would exist without the people and projects below. This is their work; this repository only joins it, patches
+it for one phone and documents how. Licences and the exact source of every part: [`THIRD_PARTY.md`](THIRD_PARTY.md) and
+[`NOTICE.md`](NOTICE.md). If a credit or a link is wrong or missing, please open an issue.
+
+**The port and its base**
+* [FakeShell](https://github.com/FakeShell/android_kernel_samsung_sdm845): the Snapdragon 845 Samsung kernel tree (branch `ubports`) this kernel is built from.
+* [Gustavo2Toledo](https://github.com/Gustavo2Toledo/ubuntu-touch-star2qltechn): the Galaxy S9+ community port whose structure this port started from, and the route to the Halium 10 Android container.
+* [UBports](https://gitlab.com/ubports) and the [Halium](https://halium.org) community: the Halium 10 container, the Mir Android platform ([`mir-android2-platform`](https://gitlab.com/ubports/development/core/hybris-support/mir-android2-platform.git)), libhybris and the 24.04 package repository ([repo.ubports.com](http://repo.ubports.com/)).
+* [Canonical](https://github.com/canonical/mir): Mir and MirAL, the compositor this desktop is built on.
+
+**Graphics**
+* [ImPeekaboo](https://github.com/ImPeekaboo/mesa-a630-kgsl): the Mesa build with Freedreno on KGSL that gives the Adreno 630 its OpenGL.
+* [lfdevs](https://github.com/lfdevs): the Xwayland patch series for Android containers and the Mesa builds for Android containers ([`mesa-for-android-container`](https://github.com/lfdevs/mesa-for-android-container)).
+* [Mesa](https://www.mesa3d.org/) and [X.Org](https://www.x.org/) (Xwayland).
+
+**Telephony, audio and Bluetooth**
+* [Mer / Sailfish OS](https://github.com/mer-hybris) hybris projects ([`libgbinder`](https://github.com/mer-hybris/libgbinder), [`bluebinder`](https://github.com/mer-hybris/bluebinder), [`pulseaudio-modules-droid`](https://github.com/mer-hybris/pulseaudio-modules-droid)) and the Sailfish OS fork of [ofono](https://git.kernel.org/pub/scm/network/ofono/ofono.git) (`ofono-sailfish`), packaged by UBports.
+* [libhybris](https://github.com/libhybris/libhybris).
+
+**Desktop**
+* [Ubuntu](https://ubuntu.com/) and [Xfce](https://www.xfce.org/); the [docklike plugin](https://gitlab.xfce.org/panel-plugins/xfce4-docklike-plugin) by David Keogh (via the [xubuntu-dev/extras PPA](https://launchpad.net/~xubuntu-dev/+archive/ubuntu/extras)).
+
+**Installing and flashing**
+* [TeamWin](https://twrp.me/): TWRP, the recovery everything is installed from ([`twrp-3.7.0_9-0-starqltechn`](https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html)).
+* [Ragekill3377](https://github.com/Ragekill3377/Odin4-GUI): Odin4-GUI, a graphical front end for `odin4`, the Linux build of Samsung's Odin; `odin4` is how the author flashed from Ubuntu (see [`docs/returning-to-android.md`](docs/returning-to-android.md)).
+* **Ian Macdonald** (Multi-disabler) and **@klabit87** (forceencrypt_remover_Q-mod), whose scripts are merged in [`tools/twrp/disabler/`](tools/twrp/disabler/README.md); both came from [this XDA post](https://xdaforums.com/t/kernel-upstream-kernelsu-susfs-s9-s9-n9-chn-usa.4703239/post-90032616).
+* [Magisk](https://github.com/topjohnwu/Magisk) (`magiskboot`, used to patch the recovery image).
+
+Samsung, Galaxy, Qualcomm, Snapdragon, Adreno and Google are trademarks of their owners. This project is not affiliated with
+or endorsed by any of them, nor by UBports or Canonical.

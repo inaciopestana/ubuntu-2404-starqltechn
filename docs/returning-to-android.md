@@ -7,9 +7,11 @@ state (the procedure in [`installing.md`](installing.md) assumes stock Android 1
 > Ubuntu root image lives. Copy anything you want to keep first. Your own `efs`/`modem` backups are only needed if you
 > damaged those partitions; a stock firmware flash does not need them.
 
-The procedure below was run by the author on his SM-G9600 with an Ubuntu 26.04 LTS (x86_64) laptop and `odin4`, from a
-phone that was running this port, back to stock, and then on to the patched TWRP. The Windows route is the standard Odin
-procedure and was **not** used in that test.
+The procedure below was run by the author on his SM-G9600 with an Ubuntu 26.04 LTS (x86_64) laptop and `odin4`: from a phone
+that was running this port back to stock Android, and on to the patched TWRP and the Ubuntu ZIP again. He did the round trip
+twice. The first time he fixed the problems of each step (they are the troubleshooting notes below); the second time he used
+nothing but the files of the [release](../../../releases) and it went through with no problem. The Windows route is the
+standard Odin procedure and was **not** used.
 
 ## 0. What you need
 * The **full stock firmware** for your model and region, from an official source (it is not distributed here). Four files:
@@ -30,7 +32,9 @@ Odin 3.14.x: load the four files in `BL`, `AP`, `CP` and `CSC`, leave *Auto Rebo
 
 ## 2b. Flash from Linux (`odin4`)
 `odin4` is a Linux command-line build of Samsung's Odin. As far as the author knows Samsung does not offer it on its
-download pages; it circulates in the community, so check where you got it from.
+download pages. The easiest way to get it is the [Odin4-GUI](https://github.com/Ragekill3377/Odin4-GUI) project by
+Ragekill3377, whose README says it includes the `odin4` binary (and an `install_odin4.sh` script); the same README calls
+`odin4` a leaked Samsung tool and states no formal licence, so check what you download as you would for any binary.
 
 1. Stop ModemManager, which may try to open the phone's serial interface in Download Mode:
    ```sh
@@ -49,8 +53,9 @@ before a flash that is already failing: after any failed attempt, **restart the 
 next try. The USB device number goes up on every attempt (006, 030, 031…) because the phone re-enumerates.
 
 ### Odin4 GUI
-There are graphical front ends that run the same `odin4` binary. The one the author looked at is a Python program using
-`customtkinter`. Ubuntu refuses `pip install` into the system Python (PEP 668), so use a virtual environment:
+[Odin4-GUI](https://github.com/Ragekill3377/Odin4-GUI) is a graphical front end for the same `odin4` binary: a Python program
+using `customtkinter`, which also needs `adb` and `usbmuxd` (its README). Ubuntu refuses `pip install` into the system Python
+(PEP 668), so use a virtual environment:
 ```sh
 sudo apt install python3-venv python3-tk
 cd Odin4-GUI                                   # the folder with main.py

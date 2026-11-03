@@ -36,6 +36,9 @@ where the corresponding source code is. The original work of this repository is 
   change of [`tools/twrp/`](tools/twrp/README.md) (a separate file, not part of the Ubuntu ZIP). TWRP is GPL-3.0 and other free licences;
   source: <https://twrp.me/> and TeamWin's GitHub organisation. The unmodified original is at
   <https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html>.
+* **`odin4` and Odin4-GUI**: not in this repository or in the release. `odin4` is a Linux build of Samsung's Odin, which the
+  author does not redistribute; the docs only point to [Odin4-GUI](https://github.com/Ragekill3377/Odin4-GUI) by Ragekill3377,
+  whose README says it bundles it and states no formal licence.
 
 ## Written offer for source code
 

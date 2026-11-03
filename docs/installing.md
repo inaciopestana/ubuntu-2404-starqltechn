@@ -1,9 +1,9 @@
 # Installing on a Galaxy S9 (SM-G9600)
 
 > **Read this first.** This is a hobby port assembled by one person on one phone. The pieces
-> below are real and were used on that phone. The release ZIP has been installed on it (through TWRP and `adb sideload`),
-> but **nobody else has repeated the whole procedure from a blank phone**, and the author's own run from a stock phone is
-> still going (see [Known gaps](#known-gaps)). Flashing a boot image can leave the phone unbootable; the ZIP erases `userdata`;
+> below are real and were used on that phone. The author went from this port back to stock Android and installed it again
+> twice; the second time with nothing but the files of the release, and it worked with no problem. **Nobody else has repeated
+> the procedure yet** (see [Known gaps](#known-gaps)). Flashing a boot image can leave the phone unbootable; the ZIP erases `userdata`;
 > doing the wrong thing to modem/EFS partitions can destroy IMEI and radio. Only continue if you can recover a phone with
 > Odin/stock firmware ([`returning-to-android.md`](returning-to-android.md)) and you accept that risk.
 
@@ -249,7 +249,7 @@ being worked on; patches welcome.
 | **Package list** | The exact list of installed packages and UBports repository pins is not yet exported. |
 | **Halium image provenance** | `android-rootfs.img` is the UBports CI artifact `halium_halium_arm64` (halium-10.0), obtained via the base port's V7 release. The ready-made release ZIP includes it; the claim that the file is unmodified has not been checked against the CI artifact. |
 | **Mesa KGSL package** | Comes from a third party (`ImPeekaboo`, Mesa under MIT). The ready-made release ZIP includes it under `/opt/mesa-kgsl-peekaboo` with credit. |
-| **Release ZIP on a phone** | Flashed by `adb sideload` on the author's phone (installer log `DONE`) and booted. That run found two problems that are fixed in the sources and in the next ZIP: the Adreno GPU device group was dropped by the privacy scrub (OpenGL failed for the user), and NetworkManager made a pointless "Wired connection 1" on the Wi-Fi Direct interface `p2p0`. The corrected ZIP still has to be rebuilt, flashed and checked on the phone (user is in group `android_graphics`, `glxinfo -B` shows FD630, no wired connection). Not yet checked at all: the SD-card route and `flash-from-pc.sh` on a real phone, and a run by anyone but the author. Stage 5 above remains the manual route. |
+| **Release ZIP on a phone** | The release files (patched TWRP, disabler ZIP, Ubuntu ZIP over `adb sideload`) were used start to finish twice on the author's phone, the second time with no problem. Earlier builds of the ZIP had two bugs found on the phone and fixed: the Adreno GPU device group was dropped by the privacy scrub, and NetworkManager made a pointless "Wired connection 1" on `p2p0`. Not yet checked: a run by anyone but the author, the SD-card route and `flash-from-pc.sh` on a real phone, Odin on Windows. Stage 5 above remains the manual route. |
 | **Tested only here** | `installer/s9-apply-overlay` and `s9-firstboot` were tested on a scratch directory, not on a phone. |
 
 ## Going back
