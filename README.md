@@ -11,44 +11,25 @@ audio, mobile data, calls and SMS.
 > partitions first and only continue if you accept that risk. See [`docs/installing.md`](docs/installing.md).
 
 ## Installation at a glance
-Five steps, in this order. Details, risks and the way back are in [`docs/installing.md`](docs/installing.md).
+Everything you need is on the [Releases](../../releases) page. Full steps, risks and the way back: [`docs/installing.md`](docs/installing.md).
 
-1. **Samsung stock Android 10 on the phone, with the PDA (AP) build `G9600ZHU9FVF2`**
-   (`QP1A.190711.020`, security patch 2022-05-01). Flash it with Odin if the phone is on another build.
-   The `system`, `vendor` and modem partitions stay exactly as Samsung shipped them; this port never writes `system`.
-2. **Unlock the bootloader** (Developer options > OEM unlocking, then the download-mode unlock). This wipes the phone and
-   trips Knox.
-3. **Install the custom TWRP that keeps its settings in `/cache`** (see [`tools/twrp/`](tools/twrp/README.md)).
-   Either download the already patched `twrp-3.7.0_9-0-starqltechn-settings-cache.tar` from the [Releases](../../releases) page
-   (an Odin "AP" file: in download mode, load it as AP in Odin, or `odin4 -a` on Linux; the details and the pitfalls, such as
-   `FAIL! (Auth)` when the phone has never been online, are in [`tools/twrp/`](tools/twrp/README.md#flashing-with-odin-from-a-pc)),
-   or patch the original yourself: [`twrp-3.7.0_9-0-starqltechn.img`](https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html).
-   Ubuntu lives in a dedicated image inside the `userdata` partition, so TWRP cannot keep its settings there; the
-   patched recovery stores them on `/cache` instead (one flag in `recovery.fstab`).
-4. **In that TWRP, flash the disabler ZIP** (`S9_G9600_disabler-and-encryption-removal.zip` from the Releases page, over USB with
-   `adb sideload`). It is `multidisabler` and `forceencrypt_remover_q` from [this XDA post](https://xdaforums.com/t/kernel-upstream-kernelsu-susfs-s9-s9-n9-chn-usa.4703239/post-90032616)
-   merged into one script that applies them in the right order, with credits and notes in [`tools/twrp/disabler/`](tools/twrp/disabler/README.md).
-   They turn off Samsung's boot-time integrity checks and the forced encryption of `userdata`, which get in the way of a custom
-   boot and root image. Do not boot Android after it.
-5. **In the same TWRP, flash the Ubuntu ZIP.** It carries the boot image and the Ubuntu root image (the Halium Android
-   container is inside the root image), and it writes them with read-back checks. Keep the ZIP on a **microSD card or
-   USB-OTG drive, never on the internal storage**: the ZIP overwrites `userdata`, and the installer refuses to run from it.
-   Download `s9-clean-*.zip` from the [Releases](../../releases) page (check its SHA-256), or build it yourself with
-   [`tools/image/build-image.sh`](tools/image/build-image.sh). On the first boot a window asks for your **user name,
-   password and host name** (how the phone shows up on the network), then the phone restarts.
-   **Over the USB cable, with no card (tested on a real phone):** in TWRP run `adb shell twrp sideload`, then
-   `adb sideload s9-clean-*.zip` on the PC (about 9 minutes for the ~1 GB ZIP; the sideloaded copy is served from the PC, so
-   the installer's guard does not trigger; how to read the log if it stops: [`docs/installing.md`](docs/installing.md#installing-the-ubuntu-zip-over-the-cable)).
-   Another cable route is [`tools/image/flash-from-pc.sh`](tools/image/flash-from-pc.sh), which streams the root image into `userdata` and the boot image into
-   `boot` with `adb` and checks both by SHA-256 read-back (details in [`tools/image/README.md`](tools/image/README.md); not tested on a real phone).
+1. **Stock Android 10 on the phone** (PDA `G9600ZHU9FVF2`) with the **bootloader unlocked**, and the phone online once so the
+   *OEM unlocking* item shows (otherwise Odin says `FAIL! (Auth)`). Not there yet:
+   [`docs/returning-to-android.md`](docs/returning-to-android.md) (Odin on Windows, `odin4` on Linux).
+2. **TWRP:** flash `twrp-3.7.0_9-0-starqltechn-settings-cache.tar` in Download Mode (Odin, AP slot, or `odin4 -a`), then boot
+   straight into it. It is TeamWin's TWRP with one change so it keeps its settings on `/cache`
+   ([`tools/twrp/`](tools/twrp/README.md)).
+3. **Disabler:** in TWRP, `adb shell twrp sideload` and `adb sideload S9_G9600_disabler-and-encryption-removal.zip`. It turns off
+   Samsung's boot-time checks and the forced encryption of `userdata` ([`tools/twrp/disabler/`](tools/twrp/disabler/README.md)).
+   Do not boot Android afterwards.
+4. **Ubuntu:** again `adb shell twrp sideload`, then `adb sideload s9-clean-*.zip` (about 9 minutes; no microSD card needed;
+   a card also works). It writes the root and boot images with SHA-256 read-back and **erases `userdata`**. Build it yourself
+   with [`tools/image/build-release.sh`](tools/image/README.md).
+5. **First boot:** a window asks for your user name, password and host name, then the phone restarts.
 
-> **Kernel.** The boot image is built from FakeShell's [`android_kernel_samsung_sdm845`](https://github.com/FakeShell/android_kernel_samsung_sdm845)
-> (branch `ubports`, Linux 4.9.186, base commit `a22a0b358140`) plus the patches in [`kernel/patches/`](kernel/patches/README.md).
->
-> The five steps describe the author's setup on one phone. The patched TWRP and the disabler ZIP of step 4 are the
-> author's choice. **Need to go back to stock Android first, or to restart from a clean phone?** See
-> [`docs/returning-to-android.md`](docs/returning-to-android.md) (Odin on Windows, `odin4` on Linux; on the author's laptop `odin4` only
-> worked through a USB 2.0 hub).
+The five steps describe the author's setup on one phone. The boot image is built from FakeShell's
+[`android_kernel_samsung_sdm845`](https://github.com/FakeShell/android_kernel_samsung_sdm845) (branch `ubports`, Linux 4.9.186)
+plus [`kernel/patches/`](kernel/patches/README.md).
 
 ### What the release ZIP contains, and what it does not
 * **Contains:** the boot image (Linux 4.9.186 with the patches of this repository) and the Ubuntu 24.04 root image: XFCE, the
