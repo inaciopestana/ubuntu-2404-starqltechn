@@ -4,10 +4,14 @@
 # glxinfo/glmark2 fail with "failed to create drisw screen".
 #
 # Builds a small synthetic root tree that mimics the author's phone, runs `audit-tree.py scrub` and `audit` on it and
-# checks the result. Needs root (the scrub chowns files); as a normal user it re-runs itself in a user namespace.
+# checks the result. Needs root (the scrub chowns files); as a normal user it re-runs itself in a user namespace, or with sudo when that is not allowed.
 #   bash tools/image/tests/test-gpu-group.sh
 set -u
-[ "$(id -u)" = 0 ] || exec unshare -r bash "$0" "$@"
+if [ "$(id -u)" != 0 ]; then
+  # a user namespace is enough, but Ubuntu 24.04+ often forbids it for normal users (AppArmor): then use sudo
+  if unshare -r true 2>/dev/null; then exec unshare -r bash "$0" "$@"; fi
+  exec sudo bash "$0" "$@"
+fi
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 AUDIT="$HERE/audit-tree.py"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT

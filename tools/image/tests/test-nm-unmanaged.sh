@@ -7,7 +7,11 @@
 # Builds a small synthetic tree with the NetworkManager files of the author's phone, runs the scrub with the clean overlay,
 # and reads the effective list back with the same parser the audit uses.   bash tools/image/tests/test-nm-unmanaged.sh
 set -u
-[ "$(id -u)" = 0 ] || exec unshare -r bash "$0" "$@"
+if [ "$(id -u)" != 0 ]; then
+  # a user namespace is enough, but Ubuntu 24.04+ often forbids it for normal users (AppArmor): then use sudo
+  if unshare -r true 2>/dev/null; then exec unshare -r bash "$0" "$@"; fi
+  exec sudo bash "$0" "$@"
+fi
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 AUDIT="$HERE/audit-tree.py"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
