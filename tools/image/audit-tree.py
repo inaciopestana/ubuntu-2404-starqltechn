@@ -288,6 +288,76 @@ class Tree:
 
 DEFER_USER = 's9user'     # placeholder account of an image whose real account is chosen at the first boot
 
+UDEV_GROUP_RX = re.compile(r'\bGROUP\s*[:+]?=\s*"([^"$%{}]+)"')
+
+
+def udev_rule_groups(t):
+    """(rule file, rule line, group) for every GROUP="name" in etc/udev/rules.d/*.rules.
+
+    The image's own udev rules name groups by name (e.g. android_graphics for /dev/kgsl-3d0 and /dev/ion). If such a
+    group is missing from /etc/group, udev cannot resolve it and the device stays root-only: the GPU is then unusable
+    for the desktop user."""
+    out = []
+    d = t.h('etc/udev/rules.d')
+    if not os.path.isdir(d):
+        return out
+    for fn in sorted(os.listdir(d)):
+        p = os.path.join(d, fn)
+        if not fn.endswith('.rules') or os.path.islink(p) or not os.path.isfile(p):
+            continue
+        with open(p, 'r', errors='surrogateescape') as f:
+            for line in f:
+                if line.lstrip().startswith('#'):
+                    continue
+                for m in UDEV_GROUP_RX.finditer(line):
+                    if not m.group(1).isdigit():
+                        out.append(('etc/udev/rules.d/' + fn, line.strip(), m.group(1)))
+    return out
+
+
+def is_gpu_rule(line):
+    return 'kgsl' in line or re.search(r'KERNEL\s*==\s*"ion"', line) is not None
+
+
+# Interfaces NetworkManager must leave alone. Any other Ethernet-type device gets an automatic "Wired connection N"
+# that asks for a DHCP lease forever. p2p0 is the Wi-Fi driver's own P2P interface (an Ethernet device for
+# NetworkManager); usb0/rndis0 is the USB debug network (it has a fixed address); swlan0 is the Wi-Fi AP interface and
+# must stay unmanaged because it shares its MAC with p2p0 (p2p0 only works with its own MAC if swlan0 is left alone).
+NM_MUST_BE_UNMANAGED = ('usb0', 'rndis0', 'swlan0', 'p2p0')
+
+
+def nm_unmanaged_devices(t):
+    """Effective [keyfile] unmanaged-devices of etc/NetworkManager/conf.d/*.conf.
+
+    The files are read in file-name order; `=` replaces the list, `+=` appends, `-=` removes. (A plain `=` in a later
+    file silently drops what the earlier files added: that is how swlan0 lost its exclusion.) Only /etc is read."""
+    items = []
+    d = t.h('etc/NetworkManager/conf.d')
+    for fn in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        p = os.path.join(d, fn)
+        if not fn.endswith('.conf') or not os.path.isfile(p):
+            continue
+        section = None
+        with open(p, 'r', errors='surrogateescape') as f:
+            for line in f:
+                s = line.strip()
+                if not s or s[0] in '#;':
+                    continue
+                if s.startswith('['):
+                    section = s.strip('[] ')
+                    continue
+                m = re.match(r'unmanaged-devices\s*(\+=|-=|=)\s*(.*)$', s)
+                if section != 'keyfile' or not m:
+                    continue
+                vals = [v.strip() for v in m.group(2).split(';') if v.strip()]
+                if m.group(1) == '=':
+                    items = vals
+                elif m.group(1) == '+=':
+                    items += vals
+                else:
+                    items = [i for i in items if i not in vals]
+    return items
+
 
 def user_regex(old):
     risky = len(old) < 4 or old in {'user', 'ubuntu', 'admin', 'phablet', 'root', 'test', 'pi', 'android', 'default'}
@@ -718,11 +788,14 @@ def cmd_scrub(a):
         return f
     rewrite('etc/passwd', fix_passwd)
     dropped_groups = set()
+    # Groups the image's own udev rules refer to (android_graphics, GID 1003, owns /dev/kgsl-3d0 and /dev/ion) are
+    # part of the system, not of the author's accounts: dropping them left the GPU root-only for every new user.
+    keep_groups = {g for _, _, g in udev_rule_groups(t)}
 
     def fix_group(f):
         if f[0] == old:
             f[0] = new
-        elif f[2].isdigit() and int(f[2]) >= 1000 and f[0] not in ('nogroup', new):
+        elif f[2].isdigit() and int(f[2]) >= 1000 and f[0] not in ('nogroup', new) and f[0] not in keep_groups:
             dropped_groups.add(f[0])
             return None
         if len(f) >= 4:
@@ -760,6 +833,8 @@ def cmd_scrub(a):
         for fn in files:
             os.lchown(os.path.join(dirpath, fn), uid, gid)
     log('passwd/shadow/group/gshadow rewritten; root locked; %d other human account(s) dropped' % len(dropped_users))
+    log('groups kept because a udev rule names them: %s; groups dropped: %s'
+        % (', '.join(sorted(keep_groups)) or 'none', ', '.join(sorted(dropped_groups)) or 'none'))
 
     rx, risky = user_regex(old)
     if risky:
@@ -941,6 +1016,28 @@ def cmd_audit(a):
         f = l.split(':')
         if len(f) > 1 and f[0] != new and f[1] not in ('*', '!', '!!', ''):
             add(block, 'password hash of an account other than the new user', f[0])
+    # groups named by the image's udev rules: they must exist, and the GPU devices must be usable by the user
+    # (a missing group makes udev ignore the rule and /dev/kgsl-3d0 stays root-only: no GPU for the desktop)
+    group_members = {}
+    if os.path.isfile(t.h('etc/group')):
+        for l in open(t.h('etc/group'), errors='surrogateescape'):
+            g = l.rstrip('\n').split(':')
+            if len(g) >= 4:
+                group_members[g[0]] = [m for m in g[3].split(',') if m]
+    for rel, line, gname in udev_rule_groups(t):
+        gpu = is_gpu_rule(line)
+        if gname not in group_members:
+            add(block if gpu else review,
+                'udev rule names a group that is not in etc/group' + (' (the GPU device would be root-only)' if gpu else ''),
+                '%s: %s' % (rel, gname))
+        elif gpu and new not in group_members[gname]:
+            add(block, 'the desktop user is not a member of the group that owns the GPU device', '%s: %s' % (gname, new))
+    # NetworkManager: interfaces that are not real networks must be unmanaged, or it creates a "Wired connection"
+    # on them that never connects (seen on p2p0 in the first clean build)
+    unmanaged = set(nm_unmanaged_devices(t))
+    for iface in NM_MUST_BE_UNMANAGED:
+        if 'interface-name:' + iface not in unmanaged:
+            add(block, 'NetworkManager would manage an interface that is not a network (automatic "Wired connection")', iface)
     for d in ('media', 'mnt'):
         dd = t.h(d)
         if os.path.isdir(dd) and not os.path.islink(dd) and os.listdir(dd):
