@@ -19,6 +19,7 @@ Packages come from the UBports repo (`ofono-sailfish`, `ofono-binder-plugin`,
 | `s9-phoned` (root daemon, UNIX socket) | calls, SMS, history, notifications; switches the Pulse card profile to `voicecall` during a call |
 | `s9-phone` | command-line client |
 | `s9-telefone` | GTK3 dialer/messages/contacts app (single instance) |
+| *Mobile Data* tile of `s9-panel` | the user-facing switch: runs those fixed `sudo` sub-commands (it replaced a submenu that used to be injected into `nm-applet`, see [`tray-panel-and-accessories.md`](tray-panel-and-accessories.md#network-icon-and-mobile-data)) |
 | `s9-pre-shutdown.service` | hangs up, takes data down, sets `Online=false`, syncs - before the Android container is killed |
 | sudoers rules | the normal user may run only fixed `s9-modem` sub-commands without a password |
 

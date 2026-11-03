@@ -29,10 +29,33 @@ offers Auto/High/Medium/Low/Off via fixed `sudo` commands.
 ## Other tray applets
 * **Bluetooth (blueman)**: the black-window problem was an apport crash handler; started
   through a launcher that sets the right environment.
-* **NetworkManager applet**: only one tray instance, via a small launch shim.
+* **NetworkManager applet**: the stock `nm-applet`, unmodified, started by `s9-nm-applet.service`
+  (`s9-nm-applet-autostart` only waits for the XFCE session and copies its environment). It handles Wi-Fi, Wi-Fi networks and
+  VPNs; it has no mobile-data entry. See [Network icon and mobile data](#network-icon-and-mobile-data).
 * **Notifications**: `xfce4-notifyd` works through the patched Mir (notification windows are
   recognised so they are not framed or stolen focus from).
 * **Menus closing slowly** was an X11 unmap handling issue in the Mir XWM, fixed in the lib.
+
+## Network icon and mobile data
+**Now:** two separate things, each with a single job.
+* The tray icon of the stock `nm-applet` is the network icon (Wi-Fi). Nothing is injected into it.
+* **Mobile data** (and the screen-cast choices) are tiles of `s9-panel`. The *Mobile Data* tile runs the fixed
+  `sudo -n s9-modem status | up [primary|backup] | down | on | off` commands (see
+  [`telephony-and-modem.md`](telephony-and-modem.md)); the screen-cast tiles use `s9-cast`. NetworkManager still cannot talk to
+  ofono, so it never shows the mobile connection.
+
+**Before (historical):** mobile data and screen cast were entries of a *modified* `nm-applet` menu, so there was one network icon
+in the tray. That needed three extra pieces:
+* `s9-modem-menu.py` (+ `s9-modem-menu-launcher`, `s9-modem-menu.service`): a StatusNotifier item that mirrored the nm-applet
+  dbusmenu over D-Bus and added the "Mobile Data" submenu after the Wi-Fi block;
+* a small `LD_PRELOAD` library (`s9-sni-noregister.so`, about 30 lines of C, built on the phone) that made `nm-applet` skip
+  `RegisterStatusNotifierItem`, so the XFCE panel did not draw a second, original icon;
+* the panel `hidden-items` list was edited so the original icon did not show in the overflow arrow either.
+
+The three pieces are not used any more. `s9-modem-menu.service` is not in [`installer/enabled-units.txt`](../installer/enabled-units.txt)
+and `s9-nm-applet-autostart` starts a plain `nm-applet`. The files of the old route are still in the repository
+(`s9-modem-menu.py`, `s9-modem-menu-launcher`, `s9-modem-menu.service`), only for reference; the shim library and its source are
+not in the repository.
 
 ## Performance housekeeping
 * CPU/GPU governor `performance` is applied on purpose (a timer re-applies it because the

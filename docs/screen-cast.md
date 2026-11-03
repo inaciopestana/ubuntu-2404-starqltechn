@@ -1,7 +1,7 @@
 # Screen casting: browser, SRT, Google Cast, DLNA and Miracast
 
 Four independent ways to show the phone/desktop screen elsewhere, all driven by one
-helper (`s9-cast`) and one tray menu.
+helper (`s9-cast`), used from the tiles of the S9 tray panel ([`tray-panel-and-accessories.md`](tray-panel-and-accessories.md)) or from the command line.
 
 ## Capture and encoding
 `mirscreencast` (from the Mir tools) captures the physical screen (RGBA 1920x1080@60) and is
