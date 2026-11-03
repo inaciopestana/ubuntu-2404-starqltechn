@@ -1,8 +1,9 @@
 #!/bin/bash
 # s9-install-chrome - install Google Chrome (arm64) from Google's permanent download link.
 # Chrome is not part of the image (it is not ours to redistribute), so the first boot fetches it.
-# The service that runs this script retries every 5 minutes until the phone is online and gives up
-# after 12 failed attempts (counter in /var/lib/s9-ubports/chrome-attempts).
+# The service that runs this script retries every 30 seconds until the phone is online, so Chrome starts downloading
+# right after Wi-Fi is connected, and gives up after 120 failed attempts, about an hour (counter in
+# /var/lib/s9-ubports/chrome-attempts).
 # Log: /var/log/s9-install-chrome.log      Run it by hand with:  sudo s9-install-chrome --force
 set -u
 URL=https://dl.google.com/linux/direct/google-chrome-stable_current_arm64.deb
@@ -14,7 +15,7 @@ echo "== s9-install-chrome $(date -Is)"
 [ "${1:-}" = "--force" ] && rm -f "$STATE"
 if dpkg -s google-chrome-stable >/dev/null 2>&1; then echo "already installed"; exit 0; fi
 N=$(cat "$STATE" 2>/dev/null || echo 0)
-if [ "$N" -ge 12 ]; then echo "gave up after $N attempts; run: sudo s9-install-chrome --force"; exit 0; fi
+if [ "$N" -ge 120 ]; then echo "gave up after $N attempts; run: sudo s9-install-chrome --force"; exit 0; fi
 echo $((N + 1)) > "$STATE"
 
 rm -f "$DEB"

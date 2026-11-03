@@ -9,7 +9,7 @@ StartLimitIntervalSec=0
 Type=oneshot
 ExecStart=/usr/local/sbin/s9-install-chrome
 Restart=on-failure
-RestartSec=300
+RestartSec=30
 TimeoutStartSec=3600
 
 [Install]
