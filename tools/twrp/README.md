@@ -20,7 +20,7 @@ Nothing else in the recovery changes. Kernel, device tree and every other ramdis
 
 No recovery image is stored in the repository tree. TWRP and `magiskboot` are third-party GPL projects; get them from their
 own releases. For convenience the result of this procedure is also attached to the
-[release](../../../../releases/tag/v0.1.0-pre1) as `twrp-3.7.0_9-0-starqltechn-settings-cache.tar` (SHA-256
+[release](../../../../releases/tag/v0.1.0) as `twrp-3.7.0_9-0-starqltechn-settings-cache.tar` (SHA-256
 `b3d3061d30f253b78f9c146639e3c2cc937c40347e55451e4d5f3420f633e7e2`), an Odin "AP" tar holding a single file,
 `recovery.img` (72,339,456 bytes, SHA-256 `96063fe2ba5c8450dced1f0bbdce9fe0da11f5a7fa462f6acaf89c122f115df0`). It is
 TeamWin's TWRP with one line changed in `etc/recovery.fstab` (see above). To flash it from Linux or Windows use Odin in

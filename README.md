@@ -45,8 +45,8 @@ plus [`kernel/patches/`](kernel/patches/README.md).
   `vendor` partition), Google Chrome (downloaded from Google at the first boot, so it needs Wi-Fi or mobile data), and any
   personal data of the author.
 * The ZIP is built by [`tools/image`](tools/image/README.md) from a backup of the author's phone, passes an automatic
-  privacy audit and was inspected afterwards; it is a **pre-release**. After the first test on a phone the build was fixed
-  (GPU device group, no pointless wired connection on `p2p0`); use the newest ZIP on the Releases page.
+  privacy audit and was inspected afterwards. Earlier builds had two bugs found on a phone and fixed (GPU device group, no pointless wired
+  connection on `p2p0`); use the ZIP of the newest release.
 
 ## What is in this repository
 | Path | Content |

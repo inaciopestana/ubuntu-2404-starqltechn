@@ -68,8 +68,8 @@ adb sideload s9-clean-*.zip                  # on the PC; takes about 9 minutes 
   ```
   The two reasons seen so far were bugs of the script under TWRP's busybox (`userdata is too small…` because its `[` compares
   integers with only 32 bits, and a failing `unzip -t` that busybox does not have); both are fixed in the current ZIP builds
-  (`tools/image/twrp/update-binary.in`), so the ZIP first attached to release `v0.1.0-pre1` shows them. If you have that one, use a newer ZIP
-  from the Releases page or build one ([`tools/image/README.md`](../tools/image/README.md)).
+  (`tools/image/twrp/update-binary.in`), so an older ZIP (made before 2026-11-03) shows them. If you have one, use the ZIP of the newest release
+  on the Releases page or build one ([`tools/image/README.md`](../tools/image/README.md)).
 * **Timeouts** (`ioctl bulk write Fail : Connection timed out`, or `adb sideload` hanging): the same USB problem as with
   `odin4`; put a USB 2.0 hub between the PC and the phone.
 * The installer writes the root image into `userdata` (read back and compared by SHA-256) and the boot image last. When the log
