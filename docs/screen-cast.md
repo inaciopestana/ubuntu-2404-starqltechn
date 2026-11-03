@@ -41,7 +41,10 @@ delays audio) fixes it; 300 ms was right for the tested TV. Implementation detai
   packets arriving is almost always wrong PIDs; check with a local capture.
 * Wi-Fi Direct needs the soft-AP interface down and unmanaged, and the group must be created
   **by NetworkManager** (a `wifi-p2p` connection via libnm); a group created with `wpa_cli`
-  is removed by NetworkManager within ~0.1 s. Marking P2P interfaces `unmanaged` does not help.
+  is removed by NetworkManager within ~0.1 s. Marking the P2P interfaces that NetworkManager creates (`p2p-dev-wlan0`,
+  `p2p-wlan0-*`) `unmanaged` does not help. (Not to be confused with the driver's own `p2p0` netdev, which Miracast does not
+  use and which the image does keep unmanaged, to avoid a pointless "Wired connection 1": see
+  [`tools/image/README.md`](../tools/image/README.md).)
 * After boot the P2P device may not come up (`Could not set interface 'p2p-dev-swlan0' UP`).
   A one-shot unit 25 s after boot stops the services, removes stale P2P devices and restarts
   them with the AP interface down and unmanaged. Always confirm with
