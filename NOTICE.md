@@ -12,7 +12,7 @@ upstream components and asserts no ownership over them.
 | `platform/patches/` | `ubports/development/core/hybris-support/mir-android2-platform` | GPL / LGPL (see its `COPYING.*`) |
 | `xwayland/` | X.Org Xwayland 24.1.6 + `lfdevs/xwayland` series | MIT/X11 |
 | `kernel/patches/`, `kernel/halium.config` | Linux kernel (Samsung sdm845 tree via [`FakeShell/android_kernel_samsung_sdm845`](https://github.com/FakeShell/android_kernel_samsung_sdm845), branch `ubports`) | GPL-2.0 only |
-| (not copied) | The [XDA post](https://xdaforums.com/t/kernel-upstream-kernelsu-susfs-s9-s9-n9-chn-usa.4703239/post-90032616) where `multidisabler` and `forceencrypt_remover_q` are obtained | as upstream |
+| `tools/twrp/disabler/` | `Multidisabler_S9_N9_1.zip` (Multi-disabler v2.3, Ian Macdonald) and `forceencrypt_remover_Q-mod.zip` (@klabit87), both from this [XDA post](https://xdaforums.com/t/kernel-upstream-kernelsu-susfs-s9-s9-n9-chn-usa.4703239/post-90032616), merged into one script | **not verified**; derivative, see the README of that directory |
 | (not shipped) | Original recovery [`twrp-3.7.0_9-0-starqltechn.img`](https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html) (TeamWin, GPL-3.0 and others); users download it and patch it with `tools/twrp/` | as upstream |
 | `kernel/deviceinfo`, `kernel/halium-graft/` | UBports/Halium community-port tooling and the `Gustavo2Toledo/ubuntu-touch-star2qltechn` S9+ port | as upstream |
 
@@ -38,7 +38,7 @@ The full list of what the ZIP contains, with licences and source locations, is i
 UBports and the Lomiri/Halium communities; Canonical (Mir/MirAL); X.Org; the `lfdevs`
 projects (Xwayland and Mesa for Android containers); ImPeekaboo (Mesa A630 KGSL packaging);
 FakeShell (Snapdragon 845 Samsung kernel); Gustavo2Toledo (Galaxy S9+ community port whose
-structure this port started from); the libhybris, ofono-sailfish and pulseaudio-modules-droid
+structure this port started from); Ian Macdonald (Multi-disabler) and klabit87 (forceencrypt_remover_Q-mod), whose scripts are merged in `tools/twrp/disabler/`; the libhybris, ofono-sailfish and pulseaudio-modules-droid
 maintainers.
 
 Samsung, Galaxy, Qualcomm, Snapdragon, Adreno, Google are trademarks of their

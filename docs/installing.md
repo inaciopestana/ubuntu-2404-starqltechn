@@ -1,35 +1,48 @@
 # Installing on a Galaxy S9 (SM-G9600)
 
 > **Read this first.** This is a hobby port assembled by one person on one phone. The pieces
-> below are real and were used on that phone, but **nobody has repeated the whole procedure from
-> a blank phone**, and the release ZIP has not been flashed on a phone yet (see [Known gaps](#known-gaps)). Flashing a boot
-> image can leave the phone unbootable; the ZIP erases `userdata`; doing the wrong thing to modem/EFS partitions can destroy
-> IMEI and radio. Only continue if you can recover a phone with Odin/stock firmware and you accept that risk.
+> below are real and were used on that phone. The release ZIP has been installed on it (through TWRP and `adb sideload`),
+> but **nobody else has repeated the whole procedure from a blank phone**, and the author's own run from a stock phone is
+> still going (see [Known gaps](#known-gaps)). Flashing a boot image can leave the phone unbootable; the ZIP erases `userdata`;
+> doing the wrong thing to modem/EFS partitions can destroy IMEI and radio. Only continue if you can recover a phone with
+> Odin/stock firmware ([`returning-to-android.md`](returning-to-android.md)) and you accept that risk.
 
 ## Quick route: the release ZIP
-1. Stock Android 10 (PDA `G9600ZHU9FVF2`) on the phone, bootloader unlocked (sections 0 and 1 below: **back up first**).
-2. Patch the original TWRP so it keeps its settings and flash it: [`tools/twrp/`](../tools/twrp/README.md).
-3. In that TWRP, flash `multidisabler` and `forceencrypt_remover_q` (links on the [front page](../README.md)).
-4. Put `s9-clean-*.zip` (from the [Releases](../../../releases) page; compare its SHA-256) on a **microSD card or USB-OTG
-   drive** and install it from TWRP. Without a card: `adb sideload`, or
-   [`tools/image/flash-from-pc.sh`](../tools/image/flash-from-pc.sh) from a PC over USB ([`tools/image/README.md`](../tools/image/README.md)).
-5. First boot: a window asks for your **user name, password and host name**; the phone restarts. Chrome is downloaded once
-   there is network. What the ZIP does and does not contain: [`THIRD_PARTY.md`](../THIRD_PARTY.md).
+1. Stock Android 10 (PDA `G9600ZHU9FVF2`) on the phone, bootloader unlocked, phone online once so that the *OEM unlocking*
+   item shows in Developer options. Not there yet, or the phone is on something else: [`returning-to-android.md`](returning-to-android.md)
+   (Odin on Windows, `odin4` on Linux). **Back up first** (section 1 below).
+2. Flash the patched TWRP (it keeps its settings): from the release `twrp-3.7.0_9-0-starqltechn-settings-cache.tar`, in
+   Download Mode, with Odin (AP slot) or `odin4 -a` ([`tools/twrp/`](../tools/twrp/README.md#flashing-with-odin-from-a-pc)).
+   Then go straight into TWRP (Volume Up + Bixby + Power).
+3. In TWRP flash the **one** disabler ZIP of the release, `S9_G9600_disabler-and-encryption-removal.zip`
+   ([`tools/twrp/disabler/`](../tools/twrp/disabler/README.md)): it does what `multidisabler` and `forceencrypt_remover_q`
+   do, in the right order. It is small, so over USB: `adb shell twrp sideload`, then `adb sideload <zip>`. Do not boot Android
+   after it.
+4. Install `s9-clean-*.zip` (from the [Releases](../../../releases) page; compare its SHA-256). Three ways:
+   * **Over the cable, no card (the tested one):** in TWRP run `adb shell twrp sideload` (or Advanced > ADB Sideload) and then
+     `adb sideload s9-clean-*.zip` on the PC. See [Installing the Ubuntu ZIP over the cable](#installing-the-ubuntu-zip-over-the-cable).
+   * From a **microSD card or USB-OTG drive**, TWRP > Install (never from the internal storage: the ZIP overwrites it).
+   * [`tools/image/flash-from-pc.sh`](../tools/image/flash-from-pc.sh) from the PC (not tested on a real phone).
+5. Reboot. On the first boot a window asks for your **user name, password and host name**; the phone restarts. Chrome is
+   downloaded once there is network. What the ZIP does and does not contain: [`THIRD_PARTY.md`](../THIRD_PARTY.md).
 
 The sections below are the manual route (building everything yourself) and the details behind each step.
 
 ## 0. What you need
 * **Samsung Galaxy S9 SM-G9600** (Snapdragon 845). Not the Exynos models; not the S9+ (SM-G9650)
   without changes (the board name, partition numbers and firmware differ).
-* **Unlocked bootloader** and **TWRP** for `starqltechn`: download the original [`twrp-3.7.0_9-0-starqltechn.img`](https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html)
-  and patch it with [`tools/twrp/`](../tools/twrp/README.md) so it keeps its settings. (Unlocking wipes the phone.)
-* **`multidisabler` and `forceencrypt_remover_q`**, flashed in that TWRP: download them from [this XDA post](https://xdaforums.com/t/kernel-upstream-kernelsu-susfs-s9-s9-n9-chn-usa.4703239/post-90032616).
+* **Unlocked bootloader** and **TWRP** for `starqltechn`: use the patched `twrp-3.7.0_9-0-starqltechn-settings-cache.tar` of the
+  release, or download the original [`twrp-3.7.0_9-0-starqltechn.img`](https://dl.twrp.me/starqltechn/twrp-3.7.0_9-0-starqltechn.img.html)
+  and patch it with [`tools/twrp/`](../tools/twrp/README.md) so it keeps its settings. Flash it with Odin or `odin4`
+  ([how, and the pitfalls](../tools/twrp/README.md#flashing-with-odin-from-a-pc)). (Unlocking wipes the phone.)
+* **`multidisabler` and `forceencrypt_remover_q`**, flashed in that TWRP. The release has them merged in one ZIP
+  ([`tools/twrp/disabler/`](../tools/twrp/disabler/README.md)); the originals are in [this XDA post](https://xdaforums.com/t/kernel-upstream-kernelsu-susfs-s9-s9-n9-chn-usa.4703239/post-90032616).
 * **Samsung stock firmware on the phone, left untouched.** The author's phone runs the last stock
   update for this model: build `G9600ZHU9FVF2` (Android 10, `QP1A.190711.020`, security patch
   2022-05-01). The `system` and `vendor` partitions and the modem firmware stay as Samsung shipped them
   (the ramdisk mounts the vendor and modem partitions at boot); this port **never writes the `system` partition**. If your phone is on another build, expect differences
   (vendor libraries, firmware paths). Get the firmware from an official source and flash it with
-  Odin; it is not distributed here.
+  Odin or `odin4`; it is not distributed here ([`returning-to-android.md`](returning-to-android.md)).
 * A Linux PC (x86_64, Ubuntu 22.04 or later) with about 40 GB free, root access, and:
   `adb`, `debootstrap`, `qemu-user-static` + `binfmt-support`, `systemd-container` (`systemd-nspawn`),
   `git`, `python3`, `mkbootimg`/`unpack_bootimg.py` (from AOSP `system/tools/mkbootimg`), `sha256sum`.
@@ -37,6 +50,30 @@ The sections below are the manual route (building everything yourself) and the d
   on an external monitor.
 * **Your own phone's firmware.** Vendor/system/firmware images and modem blobs are read from the
   phone you are converting. They are not distributed here and must not be uploaded anywhere.
+
+## Installing the Ubuntu ZIP over the cable
+This is how the release ZIP (about 1 GB) was installed on a real phone, with no microSD card. TWRP is running, USB is connected,
+and `adb devices` says `recovery`.
+```sh
+adb shell twrp sideload                      # puts TWRP in sideload mode
+adb sideload s9-clean-*.zip                  # on the PC; takes about 9 minutes for the ~1 GB ZIP
+```
+* The installer is the same one as for a card. Its guard against running from the internal storage does not trigger here,
+  because the sideloaded copy is served from the PC, not from `userdata`.
+* TWRP serves the file **on demand** through FUSE; it does not need to hold the ZIP in RAM. The progress line ends with
+  `Total xfer: 1.93x` on the author's phone when the install went through.
+* **`Total xfer: 0.00x`** means the installer stopped at once. The reason is in TWRP's log:
+  ```sh
+  adb shell 'grep -E "TWRP installer|ERROR" /tmp/recovery.log | tail -20'
+  ```
+  The two reasons seen so far were bugs of the script under TWRP's busybox (`userdata is too small…` because its `[` compares
+  integers with only 32 bits, and a failing `unzip -t` that busybox does not have); both are fixed in the current ZIP builds
+  (`tools/image/twrp/update-binary.in`), so the ZIP first attached to release `v0.1.0-pre1` shows them. If you have that one, use a newer ZIP
+  from the Releases page or build one ([`tools/image/README.md`](../tools/image/README.md)).
+* **Timeouts** (`ioctl bulk write Fail : Connection timed out`, or `adb sideload` hanging): the same USB problem as with
+  `odin4`; put a USB 2.0 hub between the PC and the phone.
+* The installer writes the root image into `userdata` (read back and compared by SHA-256) and the boot image last. When the log
+  says `DONE`, reboot. If it says anything else, do **not** reboot into Ubuntu.
 
 ## 1. Back up everything first (from TWRP)
 Boot TWRP (power off, hold **Volume Up + Bixby + Power**), connect USB, then on the PC:
@@ -212,10 +249,10 @@ being worked on; patches welcome.
 | **Package list** | The exact list of installed packages and UBports repository pins is not yet exported. |
 | **Halium image provenance** | `android-rootfs.img` is the UBports CI artifact `halium_halium_arm64` (halium-10.0), obtained via the base port's V7 release. The ready-made release ZIP includes it; the claim that the file is unmodified has not been checked against the CI artifact. |
 | **Mesa KGSL package** | Comes from a third party (`ImPeekaboo`, Mesa under MIT). The ready-made release ZIP includes it under `/opt/mesa-kgsl-peekaboo` with credit. |
-| **Release ZIP on a phone** | The ZIP builds, passes its audit and was inspected on a PC (no personal data found), but it has not been flashed on a phone. Not yet tested: the first-boot window on a real screen, the one-time rebuild of `/var/lib/android-data`, growing the file system online (`resize2fs`) on kernel 4.9, and the `boot.img` in the ZIP, which is a newer build (`#1`, 1 Nov) of the kernel than the one the author runs (`#9`, 22 Oct). Stage 5 above remains the manual route. |
+| **Release ZIP on a phone** | Flashed by `adb sideload` on the author's phone (installer log `DONE`) and booted. That run found two problems that are fixed in the sources and in the next ZIP: the Adreno GPU device group was dropped by the privacy scrub (OpenGL failed for the user), and NetworkManager made a pointless "Wired connection 1" on the Wi-Fi Direct interface `p2p0`. The corrected ZIP still has to be rebuilt, flashed and checked on the phone (user is in group `android_graphics`, `glxinfo -B` shows FD630, no wired connection). Not yet checked at all: the SD-card route and `flash-from-pc.sh` on a real phone, and a run by anyone but the author. Stage 5 above remains the manual route. |
 | **Tested only here** | `installer/s9-apply-overlay` and `s9-firstboot` were tested on a scratch directory, not on a phone. |
 
 ## Going back
 * Boot image: flash `backup-boot.img` the same way (step 4).
-* Whole phone: flash the stock Samsung firmware with Odin. Restoring `efs`/`modem` backups is
-  only needed if you damaged them.
+* Whole phone: flash the stock Samsung firmware with Odin or `odin4`, using the plain `CSC` file so `userdata` is wiped:
+  [`returning-to-android.md`](returning-to-android.md). Restoring `efs`/`modem` backups is only needed if you damaged them.

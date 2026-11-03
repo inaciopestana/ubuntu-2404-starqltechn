@@ -28,7 +28,10 @@ where the corresponding source code is. The original work of this repository is 
   the first boot from your own phone's `vendor` partition. `system`, `vendor`, the modem and `efs` are never written.
 * **Google Chrome.** Downloaded at the first boot from Google's own `.deb` link once the phone has network.
 * **The author's personal files**, accounts, keys, Wi-Fi networks, browser profiles and logs.
-* **`multidisabler` and `forceencrypt_remover_q`**: you download them from their authors (see the front page).
+* **`multidisabler` and `forceencrypt_remover_q`**: not in the Ubuntu ZIP. A merged version of the two, with credits to
+  Ian Macdonald (Multi-disabler v2.3) and @klabit87 (forceencrypt_remover_Q-mod), is a separate small ZIP in
+  [`tools/twrp/disabler/`](tools/twrp/disabler/README.md), attached to the release. **The licences of the two originals have not
+  been verified**; their source is the [XDA post](https://xdaforums.com/t/kernel-upstream-kernelsu-susfs-s9-s9-n9-chn-usa.4703239/post-90032616).
 * **TWRP**: the release also carries a copy of TeamWin's TWRP 3.7.0_9-0 for `starqltechn` (an Odin tar) with the one-line settings
   change of [`tools/twrp/`](tools/twrp/README.md) (a separate file, not part of the Ubuntu ZIP). TWRP is GPL-3.0 and other free licences;
   source: <https://twrp.me/> and TeamWin's GitHub organisation. The unmodified original is at

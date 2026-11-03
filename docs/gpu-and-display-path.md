@@ -47,6 +47,11 @@ Practical numbers on the real desktop: `glxgears` (vsync off) 1452 fps on native
 
 ### Gotchas worth remembering
 * Never extract the Mesa package into `/`; use an isolated prefix (`/opt/mesa-kgsl-peekaboo`).
+* The user must be in the group **`android_graphics`** (GID 1003): `system/etc/udev/rules.d/99-s9-gpu.rules` gives that group
+  `/dev/kgsl-3d0` and `/dev/ion` (mode 0660). Without the membership the GPU is root-only and every GL client falls back or
+  fails (`glmark2` reported no KGSL access). The release image builder keeps this group when it scrubs the author's accounts and
+  blocks the build if the placeholder account is not a member (`tools/image/tests/test-gpu-group.sh`). Check on a phone:
+  `id` (must list `android_graphics`) and `glxinfo -B | grep renderer` (must say FD630).
 * The package needs LLVM 19 (`libllvm19`, Debian trixie) while Ubuntu 24.04 has 20: unpack it
   into a sub-prefix with `dpkg -x`; put it on `LD_LIBRARY_PATH`.
 * Set `GBM_BACKENDS_PATH` to the package's own gbm directory or the system `dri_gbm.so`

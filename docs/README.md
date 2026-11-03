@@ -16,5 +16,6 @@ Start with [`architecture.md`](architecture.md), then read the topic you need.
 | [`video-playback.md`](video-playback.md) | video decoding status |
 | [`memory-pressure.md`](memory-pressure.md) | the Android low-memory killer and how it is tamed |
 | [`kmshare.md`](kmshare.md) | sharing a PC keyboard/mouse |
-| [`installing.md`](installing.md) | how to install: the release ZIP route, and the manual route |
+| [`installing.md`](installing.md) | how to install: the release ZIP route (including `adb sideload` over the cable), and the manual route |
+| [`returning-to-android.md`](returning-to-android.md) | back to stock Android 10 with Odin or `odin4`, bootloader checks, flashing the patched TWRP |
 | [`configuration.md`](configuration.md) | `/etc/s9-ubports.conf` |
